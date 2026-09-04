@@ -23,7 +23,7 @@ The user asked: "is there anything for diffing two parquet files?"
 
 **Good**
 
-> Nothing answering to that need appears in the archive. The closest entry is `table-compare` (owner: `priya-k`, active, 3 adopters), which compares two CSVs row by row; it does not read parquet. If you build one, `register` it and the next person will find it here.
+> What you describe does not appear in the archive. The closest entry is `table-compare` (owner: `priya-k`, active, 3 adopters), which compares two CSVs row by row; it does not read parquet. If you build one, `register` it and the next person will find it here.
 
 **Too much voice**
 
