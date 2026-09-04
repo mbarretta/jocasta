@@ -1,0 +1,24 @@
+[project]
+name = "jocasta"
+version = "0.1.0"
+description = "A team tool registry that is only a GitHub repo plus a Claude Code skill."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Michael Barretta" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+# The repo is scripts plus documents, not an installable package. Keeping it a
+# virtual project means `uv run` only manages the environment.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
