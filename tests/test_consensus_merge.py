@@ -35,6 +35,21 @@ Lists the files in a directory tree that changed since a given git ref.
 
 RELEASED_ENTRY = OWNED_ENTRY.replace("owner: alice", "owner: ~")
 
+# The PR-head text of a well-formed deprecation: only ``status`` and the new
+# ``deprecated`` block differ from OWNED_ENTRY. FakeGh serves it by default so
+# every vote-counting test carries an in-scope change.
+DEPRECATED_ENTRY = OWNED_ENTRY.replace(
+    "status: active",
+    "status: deprecated\ndeprecated:\n  route: consensus\n  date: 2026-09-04\n  note: Superseded by newer-cli.",
+)
+HEAD_SHA = "abc123"
+
+
+def _claimed(entry: str, login: str) -> str:
+    """``entry`` with its owner line replaced by ``login``: the shape of a claim PR."""
+    before = "owner: ~" if "owner: ~" in entry else "owner: alice"
+    return entry.replace(before, f"owner: {login}")
+
 
 # --- fake gh -----------------------------------------------------------------
 
@@ -50,14 +65,16 @@ def _pr_json(
     state: str = "open",
     merged: bool = False,
     head_ref: str = "jocasta/deprecate-example-cli-bob",
+    author_association: str = "MEMBER",
 ) -> dict:
     return {
         "number": PR,
         "state": state,
         "merged": merged,
         "user": {"login": author},
+        "author_association": author_association,
         "labels": [{"name": name} for name in labels],
-        "head": {"ref": head_ref, "sha": "abc123"},
+        "head": {"ref": head_ref, "sha": HEAD_SHA},
         "base": {"ref": DEFAULT_BRANCH, "repo": {"default_branch": DEFAULT_BRANCH}},
         "title": "deprecate example-cli",
         "html_url": f"https://github.com/{REPO}/pull/{PR}",
@@ -71,8 +88,8 @@ def _file(filename: str = ENTRY_PATH, status: str = "modified", previous: str | 
     return data
 
 
-def _review(login: str, state: str, submitted_at: str = "2026-09-04T12:00:00Z") -> dict:
-    return {"user": {"login": login}, "state": state, "submitted_at": submitted_at}
+def _review(login: str, state: str, submitted_at: str = "2026-09-04T12:00:00Z", association: str = "COLLABORATOR") -> dict:
+    return {"user": {"login": login}, "state": state, "submitted_at": submitted_at, "author_association": association}
 
 
 class FakeGh:
@@ -85,6 +102,7 @@ class FakeGh:
         reviews: list[dict],
         *,
         base_entry: str | None = OWNED_ENTRY,
+        head_entry: str | None = DEPRECATED_ENTRY,
         comments: list[dict] | None = None,
         merge_rc: int = 0,
     ):
@@ -92,6 +110,7 @@ class FakeGh:
         self.files = files
         self.reviews = reviews
         self.base_entry = base_entry
+        self.head_entry = head_entry
         self.comments = list(comments or [])
         self.merge_rc = merge_rc
         self.calls: list[list[str]] = []
@@ -146,9 +165,13 @@ class FakeGh:
                 return _completed(0, "{}")
             return _completed(0, cm.json.dumps(self.comments if page == 1 else []))
         if path.startswith("/contents/"):
-            if self.base_entry is None:
+            assert path == f"/contents/{ENTRY_PATH}", path
+            ref = params.get("ref")
+            assert ref in (DEFAULT_BRANCH, HEAD_SHA), f"contents fetched at an unexpected ref: {ref!r}"
+            text = self.base_entry if ref == DEFAULT_BRANCH else self.head_entry
+            if text is None:
                 return _completed(1, stderr="gh: Not Found (HTTP 404)")
-            return _completed(0, self.base_entry)
+            return _completed(0, text)
         raise AssertionError(f"unexpected gh api call: {args}")
 
 
@@ -233,7 +256,7 @@ def test_two_non_owner_approvals_merge_even_when_author_is_the_owner(use_gh):
 
 def test_released_entry_has_no_owner_so_two_voices_merge_a_claim(use_gh):
     pr = _pr_json(author="bob", labels=("ownership",), head_ref="jocasta/claim-example-cli-bob")
-    gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED")], base_entry=RELEASED_ENTRY))
+    gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED")], base_entry=RELEASED_ENTRY, head_entry=_claimed(RELEASED_ENTRY, "bob")))
     assert cm.run(REPO, PR) == 0
     assert len(gh.merges) == 1
     subject = gh.merges[0][gh.merges[0].index("--subject") + 1]
@@ -242,10 +265,16 @@ def test_released_entry_has_no_owner_so_two_voices_merge_a_claim(use_gh):
     gh.assert_never_closed()
 
 
-def test_entry_absent_from_default_branch_is_treated_as_unowned(use_gh):
-    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file(status="added")], [_review("carol", "APPROVED")], base_entry=None))
+def test_entry_absent_from_default_branch_is_refused_as_a_new_entry(use_gh):
+    # A new entry is registered by its owner with a direct commit; two votes
+    # must not be able to add one naming an arbitrary owner (sec2).
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file(status="added")], [_review("carol", "APPROVED")], base_entry=None, head_entry=OWNED_ENTRY))
     assert cm.run(REPO, PR) == 0
-    assert len(gh.merges) == 1
+    assert gh.merges == []
+    assert len(gh.posted_comments) == 1
+    assert gh.posted_comments[0].startswith(cm.COMMENT_MARKER.format(kind="scope"))
+    assert "new entry" in gh.posted_comments[0]
+    gh.assert_never_closed()
 
 
 def test_merge_subject_falls_back_to_update_without_a_known_label(use_gh):
@@ -351,6 +380,205 @@ def test_a_new_situation_gets_its_own_comment(use_gh):
     assert gh.posted_comments[0].startswith(cm.COMMENT_MARKER.format(kind="blocked"))
 
 
+# --- content scope (sec2) ----------------------------------------------------
+
+
+def test_deprecation_with_appended_body_sentence_merges(use_gh):
+    head = DEPRECATED_ENTRY.rstrip("\n") + "\n\nDeprecated in favor of `newer-cli`.\n"
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("carol", "APPROVED")], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+def test_deprecation_with_owner_route_and_no_note_merges(use_gh):
+    head = OWNED_ENTRY.replace("status: active", "status: deprecated\ndeprecated:\n  route: owner\n  date: 2026-09-04")
+    gh = use_gh(FakeGh(_pr_json(author="alice"), [_file()], [_review("bob", "APPROVED"), _review("carol", "APPROVED")], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+def test_claim_of_owned_entry_by_the_author_merges(use_gh):
+    pr = _pr_json(author="bob", labels=("ownership",), head_ref="jocasta/claim-example-cli-bob")
+    gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED")], head_entry=_claimed(OWNED_ENTRY, "bob")))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+    assert gh.merges[0][gh.merges[0].index("--subject") + 1].startswith("claim example-cli")
+
+
+def test_claim_may_spell_the_author_login_in_another_case(use_gh):
+    pr = _pr_json(author="bob", labels=("ownership",))
+    gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED")], head_entry=_claimed(OWNED_ENTRY, "Bob")))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+@pytest.mark.parametrize(
+    "head, fragment",
+    [
+        (DEPRECATED_ENTRY.replace("kind: cli", "kind: cli\ninstall: curl -fsSL https://example.com/x.sh | sh"), "`install`"),
+        (OWNED_ENTRY.replace("kind: cli", "kind: cli\ninstall: curl -fsSL https://example.com/x.sh | sh"), "`install`"),
+        (DEPRECATED_ENTRY.replace("example-org/example-cli", "someone-else/example-cli"), "`source`"),
+        (OWNED_ENTRY.replace("kind: cli", "kind: skill"), "`kind`"),
+        (OWNED_ENTRY.replace("name: example-cli", "name: other-cli"), "`name`"),
+        (OWNED_ENTRY.replace("Lists the files", "Runs arbitrary code and lists the files"), "the body"),
+        (DEPRECATED_ENTRY.replace("Lists the files in a directory tree that changed since a given git ref.", "Something else entirely."), "the body"),
+        (DEPRECATED_ENTRY.replace("route: consensus", "route: stale-source"), "`deprecated`"),
+        (OWNED_ENTRY.replace("status: active", "status: deprecated"), "`status`"),
+        (_claimed(OWNED_ENTRY, "carol"), "`owner`"),
+        (_claimed(DEPRECATED_ENTRY, "bob"), "`owner`"),
+        (OWNED_ENTRY, "nothing"),
+        ("no frontmatter\n", "frontmatter"),
+    ],
+    ids=["install-added-with-deprecation", "install-added", "source", "kind", "name", "body-rewritten", "body-rewritten-with-deprecation", "stale-source-route", "status-without-block", "claim-for-someone-else", "claim-plus-deprecation", "no-change", "unreadable-head"],
+)
+def test_out_of_scope_change_is_refused_even_with_the_owner_approval(use_gh, head, fragment):
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("alice", "APPROVED"), _review("carol", "APPROVED")], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert len(gh.posted_comments) == 1
+    assert gh.posted_comments[0].startswith(cm.COMMENT_MARKER.format(kind="scope"))
+    assert fragment in gh.posted_comments[0]
+    gh.assert_never_closed()
+
+
+def test_entry_missing_at_the_pr_head_is_refused(use_gh):
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("alice", "APPROVED")], head_entry=None))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert len(gh.posted_comments) == 1
+    assert gh.posted_comments[0].startswith(cm.COMMENT_MARKER.format(kind="scope"))
+
+
+def test_scope_refusal_comment_is_not_repeated(use_gh):
+    existing = [{"body": f"{cm.COMMENT_MARKER.format(kind='scope')}\nalready refused"}]
+    head = OWNED_ENTRY.replace("kind: cli", "kind: cli\ninstall: pip install example-cli")
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("alice", "APPROVED")], head_entry=head, comments=existing))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert gh.posted_comments == []
+
+
+def test_scope_is_checked_before_votes_are_counted(use_gh, capsys):
+    # An out-of-scope PR with no votes yet hears about the scope problem now,
+    # not after two people have approved it.
+    head = OWNED_ENTRY.replace("kind: cli", "kind: cli\ninstall: pip install example-cli")
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.posted_comments) == 1
+    assert "waiting" not in capsys.readouterr().out
+
+
+# --- login case and review states (sec3) -------------------------------------
+
+
+def test_owner_veto_matches_the_login_case_insensitively(use_gh):
+    base = OWNED_ENTRY.replace("owner: alice", "owner: Alice")
+    gh = use_gh(
+        FakeGh(
+            _pr_json(author="bob"),
+            [_file()],
+            [_review("carol", "APPROVED"), _review("dave", "APPROVED"), _review("alice", "CHANGES_REQUESTED")],
+            base_entry=base,
+            head_entry=DEPRECATED_ENTRY.replace("owner: alice", "owner: Alice"),
+        )
+    )
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert len(gh.posted_comments) == 1
+    assert "requested changes" in gh.posted_comments[0]
+
+
+def test_owner_approval_matches_the_login_case_insensitively(use_gh):
+    base = OWNED_ENTRY.replace("owner: alice", "owner: Alice")
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("alice", "APPROVED")], base_entry=base, head_entry=DEPRECATED_ENTRY.replace("owner: alice", "owner: Alice")))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+    assert "route: owner" in gh.merges[0][gh.merges[0].index("--subject") + 1]
+
+
+def test_owner_author_in_another_case_is_not_a_voice(use_gh, capsys):
+    base = OWNED_ENTRY.replace("owner: alice", "owner: Alice")
+    gh = use_gh(FakeGh(_pr_json(author="alice"), [_file()], [_review("bob", "APPROVED")], base_entry=base, head_entry=DEPRECATED_ENTRY.replace("owner: alice", "owner: Alice")))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert "1 of 2" in capsys.readouterr().out
+
+
+def test_owner_comment_after_changes_requested_keeps_the_block(use_gh):
+    gh = use_gh(
+        FakeGh(
+            _pr_json(author="bob"),
+            [_file()],
+            [
+                _review("carol", "APPROVED"),
+                _review("alice", "CHANGES_REQUESTED", "2026-09-04T10:00:00Z"),
+                _review("alice", "COMMENTED", "2026-09-04T11:00:00Z"),
+            ],
+        )
+    )
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert len(gh.posted_comments) == 1
+    assert "requested changes" in gh.posted_comments[0]
+
+
+def test_reviewer_comment_after_approval_keeps_the_approval(use_gh):
+    gh = use_gh(
+        FakeGh(
+            _pr_json(author="bob"),
+            [_file()],
+            [_review("carol", "APPROVED", "2026-09-04T10:00:00Z"), _review("carol", "COMMENTED", "2026-09-04T11:00:00Z")],
+        )
+    )
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+# --- who may be a voice (sec4) ------------------------------------------------
+
+
+def test_approval_from_an_outside_account_is_not_a_voice(use_gh, capsys):
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("stranger", "APPROVED", association="NONE")]))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert "1 of 2" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN"])
+def test_only_owner_member_and_collaborator_reviews_count(use_gh, association):
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("carol", "APPROVED", association=association)]))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_repository_insiders_are_voices(use_gh, association):
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("carol", "APPROVED", association=association)]))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+def test_outside_author_is_not_a_voice(use_gh, capsys):
+    gh = use_gh(FakeGh(_pr_json(author="bob", author_association="NONE"), [_file()], [_review("carol", "APPROVED")]))
+    assert cm.run(REPO, PR) == 0
+    assert gh.merges == []
+    assert "1 of 2" in capsys.readouterr().out
+
+
+def test_outside_author_claim_merges_on_two_insider_approvals(use_gh):
+    pr = _pr_json(author="bob", labels=("ownership",), author_association="NONE")
+    gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED"), _review("dave", "APPROVED")], head_entry=_claimed(OWNED_ENTRY, "bob")))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+def test_outside_owner_veto_is_ignored(use_gh):
+    # The owner's review is subject to the same association filter as everyone else's.
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("carol", "APPROVED"), _review("alice", "CHANGES_REQUESTED", association="NONE")]))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
 # --- refused PRs -------------------------------------------------------------
 
 
@@ -441,23 +669,96 @@ def test_merge_failure_exits_one(use_gh, capsys):
 # --- decide() as a pure function ---------------------------------------------
 
 
+def _decide(**kwargs) -> cm.Decision:
+    kwargs.setdefault("author_association", "MEMBER")
+    return cm.decide(**kwargs)
+
+
 def test_decide_owner_approval_beats_consensus_count():
     latest = {"alice": "APPROVED", "carol": "APPROVED"}
-    decision = cm.decide(owner="alice", author="bob", latest_reviews=latest)
+    decision = _decide(owner="alice", author="bob", latest_reviews=latest)
     assert decision.action == "merge" and decision.route == "owner"
 
 
 def test_decide_reports_voice_count_when_short():
-    decision = cm.decide(owner="alice", author="bob", latest_reviews={})
+    decision = _decide(owner="alice", author="bob", latest_reviews={})
     assert decision.action == "wait"
     assert decision.voices == ["bob"]
 
 
 def test_decide_unowned_entry_needs_two_voices():
-    assert cm.decide(owner=None, author="bob", latest_reviews={}).action == "wait"
-    merged = cm.decide(owner=None, author="bob", latest_reviews={"carol": "APPROVED"})
+    assert _decide(owner=None, author="bob", latest_reviews={}).action == "wait"
+    merged = _decide(owner=None, author="bob", latest_reviews={"carol": "APPROVED"})
     assert merged.action == "merge" and merged.route == "consensus"
     assert merged.voices == ["bob", "carol"]
+
+
+def test_decide_compares_logins_case_insensitively():
+    blocked = _decide(owner="Alice", author="bob", latest_reviews={"alice": "CHANGES_REQUESTED", "carol": "APPROVED"})
+    assert blocked.action == "blocked"
+    owner_route = _decide(owner="Alice", author="bob", latest_reviews={"alice": "APPROVED"})
+    assert owner_route.action == "merge" and owner_route.route == "owner"
+    # An owner-author spelled differently is still the owner, and an approval
+    # from the author under another spelling is still the author's.
+    waiting = _decide(owner="Alice", author="alice", latest_reviews={"Bob": "APPROVED"})
+    assert waiting.action == "wait" and waiting.voices == ["Bob"]
+    waiting = _decide(owner=None, author="Bob", latest_reviews={"bob": "APPROVED"})
+    assert waiting.action == "wait" and waiting.voices == ["Bob"]
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", None, ""])
+def test_decide_outside_author_is_not_a_voice(association):
+    decision = cm.decide(owner="alice", author="bob", author_association=association, latest_reviews={"carol": "APPROVED"})
+    assert decision.action == "wait"
+    assert decision.voices == ["carol"]
+
+
+def test_latest_review_states_keeps_only_counted_states_from_insiders():
+    reviews = [
+        _review("carol", "APPROVED", "2026-09-04T10:00:00Z"),
+        _review("carol", "COMMENTED", "2026-09-04T11:00:00Z"),
+        _review("alice", "CHANGES_REQUESTED", "2026-09-04T10:00:00Z"),
+        _review("alice", "PENDING", "2026-09-04T11:00:00Z"),
+        _review("dave", "APPROVED", "2026-09-04T10:00:00Z"),
+        _review("dave", "DISMISSED", "2026-09-04T11:00:00Z"),
+        _review("erin", "APPROVED", association="NONE"),
+        _review("some-app[bot]", "APPROVED"),
+        {"user": None, "state": "APPROVED", "submitted_at": "2026-09-04T12:00:00Z"},
+        {"user": {"login": "frank"}, "state": "APPROVED", "submitted_at": "2026-09-04T12:00:00Z"},
+    ]
+    assert cm.latest_review_states(reviews) == {"carol": "APPROVED", "alice": "CHANGES_REQUESTED", "dave": "DISMISSED"}
+
+
+def test_latest_review_states_merges_spellings_of_one_login():
+    reviews = [_review("Carol", "APPROVED", "2026-09-04T10:00:00Z"), _review("carol", "DISMISSED", "2026-09-04T11:00:00Z")]
+    assert cm.latest_review_states(reviews) == {"carol": "DISMISSED"}
+
+
+# --- change_in_scope() as a pure function --------------------------------------
+
+
+def test_change_in_scope_accepts_the_two_shapes():
+    assert cm.change_in_scope(base_text=OWNED_ENTRY, head_text=DEPRECATED_ENTRY, author="bob") == ("deprecation", "")
+    assert cm.change_in_scope(base_text=OWNED_ENTRY, head_text=_claimed(OWNED_ENTRY, "bob"), author="bob") == ("claim", "")
+    assert cm.change_in_scope(base_text=RELEASED_ENTRY, head_text=_claimed(RELEASED_ENTRY, "bob"), author="bob") == ("claim", "")
+
+
+def test_change_in_scope_ignores_yaml_and_whitespace_formatting():
+    head = DEPRECATED_ENTRY.replace("owner: alice", "owner: 'alice'").replace("kind: cli", "kind:   cli") + "\n\n"
+    assert cm.change_in_scope(base_text=OWNED_ENTRY, head_text=head, author="bob") == ("deprecation", "")
+
+
+def test_change_in_scope_names_every_changed_field():
+    head = _claimed(DEPRECATED_ENTRY, "bob").replace("kind: cli", "kind: skill\ninstall: pip install x")
+    shape, why = cm.change_in_scope(base_text=OWNED_ENTRY, head_text=head, author="bob")
+    assert shape is None
+    assert "`deprecated`" in why and "`install`" in why and "`kind`" in why and "`owner`" in why and "`status`" in why
+
+
+def test_change_in_scope_requires_the_base_to_be_active_for_a_deprecation():
+    base = DEPRECATED_ENTRY.replace("route: consensus", "route: owner")
+    shape, why = cm.change_in_scope(base_text=base, head_text=DEPRECATED_ENTRY, author="bob")
+    assert shape is None and "`deprecated`" in why
 
 
 # --- CLI ---------------------------------------------------------------------
