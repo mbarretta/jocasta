@@ -807,6 +807,18 @@ def test_write_paths_reference_names_branches_labels_and_the_retry_recipe():
     assert "adoption.yaml" in text
 
 
+def test_write_paths_reference_states_insider_voices_and_content_scope():
+    """The consensus summary in write-paths.md must not lag the rules the script enforces."""
+    text = (REFERENCES / "write-paths.md").read_text(encoding="utf-8")
+    section = text.split("## What the consensus action does with the PR", 1)[1].split("\n## ", 1)[0]
+    assert "`author_association`" in section
+    for association in cm.VOICE_ASSOCIATIONS:
+        assert f"`{association}`" in section, f"{association} is not named as a voice"
+    assert "deprecation" in section and "claim" in section
+    assert "`active`" in section and "`deprecated`" in section
+    assert "nothing else" in section
+
+
 def test_ownership_reference_covers_every_mode_and_the_consensus_rules():
     text = (REFERENCES / "ownership.md").read_text(encoding="utf-8")
     for heading in ("deprecate", "transfer", "release", "claim"):

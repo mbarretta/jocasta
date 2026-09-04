@@ -287,6 +287,12 @@ def test_owner_login_comparison_ignores_case(registry):
     assert registry.authorize(registry.base, "alice")[0] == []
 
 
+def test_login_comparison_goes_through_the_shared_helper():
+    """validate.py compares logins with jocasta_common.same_login, not a private copy."""
+    assert not hasattr(validate, "_same_login")
+    assert "jc.same_login(" in Path(validate.__file__).read_text(encoding="utf-8")
+
+
 def test_modified_own_entry_passes(registry):
     registry.write("entries/alice-tool.md", entry_text("alice-tool", "alice", body="A longer description.\n\nMore."))
     registry.commit("edit alice-tool")
