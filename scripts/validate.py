@@ -329,7 +329,7 @@ def check_authorization(
     ``jc.GitError`` when git itself cannot answer (no repository, no HEAD).
     """
     root = Path(root)
-    if _same_login(actor, WORKFLOW_ACTOR):
+    if jc.same_login(actor, WORKFLOW_ACTOR):
         return [], [f"{AUTHORIZATION_RULE}: skipped; {actor} is the instance's own workflow and the PR path already gated this push"]
     if event == PULL_REQUEST_EVENT:
         return [], [f"{AUTHORIZATION_RULE}: skipped; a {event} event checks out GitHub's synthetic merge commit and the PR path gates it"]
@@ -396,7 +396,7 @@ def _authorize_entry(root: Path, base: str | None, status: str, path: str, actor
             return refuse(f"owner could not be read: {error}")
         if owner is None:
             return refuse(f"new entry has no owner (~) but was pushed by {actor}")
-        if not _same_login(owner, actor):
+        if not jc.same_login(owner, actor):
             return refuse(f"new entry names owner {owner!r} but was pushed by {actor}")
         return []
     if status == "M":
@@ -405,7 +405,7 @@ def _authorize_entry(root: Path, base: str | None, status: str, path: str, actor
             return refuse(f"owner at REF could not be read: {error}")
         if owner is None:
             return refuse("unowned (~) at REF; only a claim PR may set its owner")
-        if not _same_login(owner, actor):
+        if not jc.same_login(owner, actor):
             return refuse(f"owned by {owner} at REF, pushed by {actor}")
         return []
     return refuse(f"unsupported change type {status!r}")
@@ -479,10 +479,6 @@ def _adopters_at(root: Path, rev: str, label: str, out: list[str]) -> dict[str, 
 def _show(root: Path, rev: str, path: str) -> str:
     # `./` makes the path relative to the -C directory rather than the repository root.
     return jc.git_output(root, ["show", f"{rev}:./{path}"])
-
-
-def _same_login(a: object, b: object) -> bool:
-    return isinstance(a, str) and isinstance(b, str) and a.casefold() == b.casefold()
 
 
 # --- helpers -----------------------------------------------------------------

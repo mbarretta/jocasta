@@ -53,7 +53,7 @@ All three scripts take `--help`. From the repo root, with `uv`:
 uv run python scripts/validate.py --root <instance> [--offline]
 
 # The push-authorization rule, as the instance's validate.yml runs it.
-uv run python scripts/validate.py --root <instance> --changed-only <base-sha> --actor <login>
+uv run python scripts/validate.py --root <instance> --changed-only <base-sha> --actor <login> [--event NAME]
 
 # Merge decision for one PR. Talks to GitHub through `gh` and merges for real
 # when the rule is met; point it at a sandbox instance, never at a team's.
@@ -99,7 +99,7 @@ file is for developing the repo, not plugin context).
   not exist"; it says the tool "does not appear in the archive". A test scans
   `skills/` for the forbidden phrase outside lines that forbid it.
 - **CLI contracts are fixed** because the composite actions call them:
-  `validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN]`,
+  `validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN [--event NAME]]`,
   `consensus_merge.py --repo OWNER/REPO --pr N`,
   `stale_sweep.py --root DIR --repo OWNER/REPO [--dry-run]`. Add flags; never
   rename or remove these.
