@@ -108,3 +108,58 @@ def test_skill_text_never_says_does_not_exist_except_to_forbid_it():
 def test_reference_files_written_by_this_wave_exist():
     for name in ("voice.md", "init-connect.md"):
         assert (SKILL_DIR / "references" / name).is_file()
+
+
+MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+
+
+def test_marketplace_json_serves_this_repo_as_a_single_plugin_marketplace():
+    """`/plugin marketplace add mbarretta/jocasta` then `/plugin install jocasta@jocasta`
+    only works if the repo carries a marketplace manifest whose one plugin is the
+    repo root. Both READMEs give exactly those two commands."""
+    data = json.loads(MARKETPLACE_JSON.read_text())
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    assert data["name"] == "jocasta"
+    assert data["owner"]["name"] == plugin["author"]["name"]
+    (entry,) = data["plugins"]
+    assert entry["name"] == plugin["name"]
+    assert entry["source"] in ("./", "."), "the plugin is the repo root, so init can find template/"
+    for readme in (REPO_ROOT / "README.md", REPO_ROOT / "template" / "README.md"):
+        text = readme.read_text()
+        assert "/plugin marketplace add mbarretta/jocasta" in text, readme
+        assert "/plugin install jocasta@jocasta" in text, readme
+
+
+def test_skill_md_names_every_reference_file_and_every_named_file_exists():
+    text = SKILL_MD.read_text()
+    named = set(re.findall(r"references/([a-z-]+\.md)", text))
+    on_disk = {p.name for p in (SKILL_DIR / "references").glob("*.md")}
+    assert named == on_disk, f"named but missing: {named - on_disk}; on disk but unnamed: {on_disk - named}"
+
+
+def test_mode_table_write_paths_agree_with_write_paths_reference():
+    """write-paths.md is the D-3 decision table; the mode table may only summarize it."""
+    write_paths = (SKILL_DIR / "references" / "write-paths.md").read_text()
+    expected = {
+        "search": "none",
+        "show": "none",
+        "register": "direct commit",
+        "deprecate": "direct commit (owner) or PR (non-owner)",
+        "transfer": "direct commit (owner only)",
+        "release": "direct commit (owner only)",
+        "claim": "PR",
+        "adopt": "direct commit",
+        "unadopt": "direct commit",
+        "init": "direct commit (to the new repo)",
+        "connect": "none",
+    }
+    rows = _mode_table_rows(SKILL_MD.read_text())
+    actual = {re.sub(r"[`*]", "", row[0]).split()[0]: row[-1] for row in rows}
+    assert actual == expected
+    # Every mode the table says writes to the registry has a row in the decision
+    # table (adopt and unadopt share one row, so match anywhere in the first cell).
+    for mode in ("register", "deprecate", "transfer", "release", "claim", "adopt", "unadopt"):
+        assert re.search(rf"^\|[^|\n]*`{mode}\b", write_paths, re.MULTILINE), f"write-paths.md has no row for {mode}"
+    # And the modes outside the table are named there as outside it.
+    for mode in ("init", "connect", "search", "show"):
+        assert f"`{mode}`" in write_paths, f"write-paths.md does not account for {mode}"

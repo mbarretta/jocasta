@@ -9,7 +9,7 @@ Deprecation has three routes, recorded in the entry's `deprecated.route` field: 
 1. Refresh the snapshot and resolve the caller's `<login>` (SKILL.md: Snapshot, Identity).
 2. Read `entries/<name>.md` from the snapshot. If there is no such file, stop with the archive wording: "`<name>` does not appear in the archive." Offer `search` if the user may have the name wrong.
 3. Note the entry's `owner`. `owner: ~` means the entry is **unowned** (released); say "unowned", never "orphaned" or "abandoned".
-4. Decide whether the caller is the owner: `owner == <login>`, exact match. This one comparison chooses the row in the write-paths table. The comparison is the skill's convenience; the push authorization check and the consensus script make the same comparison server-side, so a mistake here is refused, not landed.
+4. Decide whether the caller is the owner: `owner == <login>`, exact match. This one comparison chooses the row in the write-paths table. The comparison is the skill's convenience; the push authorization check and the consensus script make the same comparison server-side, so a mistake here is caught: a wrong direct commit turns the instance's `validate` run red with an `authorization` line, and a wrong PR is not merged.
 
 Every closing message opens with the plain statement of what was committed (path, commit SHA, repo) or which PR was opened (URL), before any character text (charter R-8). Templates are at the end of this file.
 
@@ -78,7 +78,7 @@ When the PR merges, the caller is the owner and every owner-only mode is theirs.
 `scripts/consensus_merge.py` runs on every PR event in the instance. It is the only thing that merges a `deprecation` or `ownership` PR; the skill never merges, never approves, and never closes one. The rules, in order:
 
 1. **Already merged or closed:** nothing happens. The script never closes, reopens, or comments on a closed PR.
-2. **Exactly one `entries/<name>.md`:** a PR that changes any other set of files (two files, `adoption.yaml`, `entries/README.md`, a deleted or renamed entry) gets one comment explaining why and is not merged. Fix it by splitting the change; the PR stays open.
+2. **Exactly one `entries/<name>.md`:** a PR that changes any other set of files (two files, `adoption.yaml`, `entries/README.md`, a file in a subdirectory of `entries/`, a deleted or renamed entry) gets one comment explaining why and is not merged. Fix it by splitting the change; the PR stays open.
 3. **Owner from the default branch:** the script reads the entry as it is on the default branch, not as the PR would make it (otherwise a claim could approve itself). `owner: ~` or a file not yet on the default branch means **no owner**.
 4. **Latest review per person:** each reviewer's most recent review is the one that counts. An approval that was later dismissed or followed by "request changes" is gone. Reviews from `[bot]` accounts are ignored.
 5. **Owner approved:** merge, route `owner`.
@@ -86,7 +86,7 @@ When the PR merges, the caller is the owner and every owner-only mode is theirs.
 7. **Two non-owner voices:** the PR author (when they are not the owner) is one voice; every other reviewer who is neither the owner nor the author and whose latest review is an approval is another. Two or more: merge, route `consensus`. An unowned entry can only merge this way.
 8. **Otherwise:** wait. The workflow log says how many voices are still needed; the next review re-runs the script.
 
-Merges are squash commits with the subject `<verb> <name> (route: <route>)`, where `<verb>` is `deprecate` for a `deprecation` label and `claim` for `ownership`. Re-running the script on the same PR is always safe; it comments at most once per situation (wrong file set, unreadable owner, owner requested changes), so a PR that is fixed and then blocked for a new reason still hears why.
+Merges are squash commits with the subject `<verb> <name> (route: <route>)`, where `<verb>` is `deprecate` for a `deprecation` label and `claim` for `ownership`. Re-running the script on the same PR is always safe; it comments at most once per situation (wrong file set, unreadable owner, owner requested changes), so a PR that is fixed and then blocked for a new reason still hears why. A `stale-source` PR opened with the workflow's own token does not start this workflow when it opens; the script first runs on the first human review, label, or push to the PR (`references/write-paths.md`, the trigger caveat).
 
 Worked outcomes, for an entry owned by `alice`:
 
