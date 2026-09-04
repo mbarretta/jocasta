@@ -107,7 +107,7 @@ adding or removing the actor's own login.
 
 ## Validator output
 
-`scripts/validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN]`
+`scripts/validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN [--event NAME]]`
 exits 0 when the registry is clean and 1 when any rule fails, printing one
 plain line per failure:
 
@@ -122,7 +122,7 @@ Rule names: `frontmatter`, `unknown-key`, `name`, `owner`, `source`, `kind`,
 `schema-version`, and `authorization` (below). The skill shows these lines to
 the submitter verbatim when a write fails; it never bypasses them (P-4).
 
-## Push authorization: `--changed-only REF --actor LOGIN`
+## Push authorization: `--changed-only REF --actor LOGIN [--event NAME]`
 
 The schema rules say whether the registry is well formed. The `authorization`
 rule, run by the instance's `validate` workflow on every push to the default
@@ -141,9 +141,12 @@ Logins are compared case-insensitively, as GitHub treats them.
 A violation prints `<file>: authorization: <detail>; open a PR instead`. When
 `REF` is the all-zeros SHA of a first push or is not a commit in the checkout,
 every registry file is treated as added and the same rules apply. The check is
-skipped, with a printed notice, when the actor is `github-actions[bot]` or
-`HEAD` is a merge commit: both are the shape a pull request merge takes, which
-review and the consensus action already gated. The skip tests shape, not
-provenance, and the workflow runs after the push has landed; `references/adoption.md`
-describes what the workflow passes as `REF`, where the rule's reach ends, and
-the branch protection that backstops it.
+skipped, with a printed notice, when the actor is `github-actions[bot]` (a
+consensus merge) or `NAME` is `pull_request` (the checkout is GitHub's
+synthetic merge of the PR); both are the pull request path, which review and
+the consensus action already gated. On a `push` event `HEAD` is checked even
+when it is a merge commit. Without `--event` the check falls back to skipping
+any two-parent `HEAD`, for callers that predate the flag. The workflow runs
+after the push has landed; `references/adoption.md` describes what the workflow
+passes as `REF` and `NAME`, where the rule's reach ends, and the branch
+protection that backstops it.

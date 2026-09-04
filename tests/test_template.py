@@ -157,6 +157,8 @@ def test_validate_workflow_runs_read_only_on_default_branch_pushes_and_prs():
         validate["with"]["base-ref"]
         == "${{ github.event.before || github.event.pull_request.base.sha }}"
     )
+    # sec1: the validator only skips merge commits it knows came from a PR.
+    assert validate["with"]["event"] == "${{ github.event_name }}"
 
 
 def test_consensus_merge_workflow_reacts_to_pr_and_review_events_with_write_scope():
@@ -218,7 +220,16 @@ def test_validate_action_invokes_the_documented_cli_contract():
     assert "scripts/validate.py" in text
     assert re.search(r'--root\s+"?\$(\{)?GITHUB_WORKSPACE', text), text
     assert "--changed-only" in text and "--actor" in text
+    assert "--event" in text
     assert "--offline" not in text
+
+
+def test_validate_action_defaults_event_so_older_instance_workflows_stay_gated():
+    # An instance whose validate.yml predates the `event` input still gets the
+    # merge-commit check on pushes: the action reads the event itself.
+    event = load(ACTIONS / "validate" / "action.yml")["inputs"]["event"]
+    assert event.get("required", False) is False
+    assert event["default"] == "${{ github.event_name }}"
 
 
 def test_consensus_merge_action_invokes_the_documented_cli_contract():

@@ -11,6 +11,10 @@ inputs:
   base-ref:
     description: Commit the changed-file set is computed against (`github.event.before` on push, the base SHA on pull_request).
     required: true
+  event:
+    description: The event behind the checkout (`github.event_name`). On `pull_request` the authorization check is skipped, because the checkout is GitHub's synthetic merge commit and the PR path gates it; on `push` every commit is checked, merge commit or not. Defaults to the current event so instance workflows that predate this input are covered.
+    required: false
+    default: ${{ github.event_name }}
   token:
     description: Exported as GH_TOKEN for source-reachability checks through `gh api`. Defaults to the workflow token; pass a personal access token if sources live in repositories the workflow token cannot read.
     required: false
@@ -38,8 +42,10 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         JOCASTA_BASE_REF: ${{ inputs.base-ref }}
         JOCASTA_ACTOR: ${{ inputs.actor }}
+        JOCASTA_EVENT: ${{ inputs.event }}
       run: |
         python "$GITHUB_WORKSPACE/.jocasta-machinery/scripts/validate.py" \
           --root "$GITHUB_WORKSPACE" \
           --changed-only "$JOCASTA_BASE_REF" \
-          --actor "$JOCASTA_ACTOR"
+          --actor "$JOCASTA_ACTOR" \
+          --event "$JOCASTA_EVENT"

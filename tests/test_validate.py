@@ -230,8 +230,8 @@ class TempRegistry:
         self.git("commit", "-q", "-m", message)
         return self.git("rev-parse", "HEAD")
 
-    def authorize(self, ref, actor):
-        return validate.check_authorization(self.root, ref, actor)
+    def authorize(self, ref, actor, event=None):
+        return validate.check_authorization(self.root, ref, actor, event=event)
 
 
 @pytest.fixture
@@ -460,7 +460,23 @@ def test_unreadable_adoption_yaml_fails_closed(registry):
     assert_authorization_lines(failures, "adoption.yaml")
 
 
-# ac3: first push, unknown ref, workflow actor, merge commits
+# ac3: first push, unknown ref, workflow actor, merge commits; sec1: --event
+
+
+def merge_foreign_edit_on_main(registry):
+    """A ``--no-ff`` merge onto main whose side branch takes bob's entry as alice.
+
+    Returns the tip of main before the merge, which is what GitHub sends as
+    ``github.event.before`` for the push of the merge commit.
+    """
+    registry.git("checkout", "-q", "-b", "jocasta/claim-bob-tool-alice")
+    registry.write("entries/bob-tool.md", entry_text("bob-tool", "alice"))
+    registry.commit("claim bob-tool")
+    registry.git("checkout", "-q", "main")
+    registry.write("entries/alice-tool.md", entry_text("alice-tool", "alice", body="edited on main"))
+    before = registry.commit("edit alice-tool")
+    registry.git("merge", "-q", "--no-ff", "-m", "Merge claim", "jocasta/claim-bob-tool-alice")
+    return before
 
 
 @pytest.mark.parametrize("ref", [ZEROS, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "no-such-branch"])
@@ -492,16 +508,46 @@ def test_workflow_actor_is_skipped_with_a_notice(registry):
 
 
 def test_merge_commit_is_skipped_with_a_notice(registry):
-    registry.git("checkout", "-q", "-b", "jocasta/claim-bob-tool-alice")
-    registry.write("entries/bob-tool.md", entry_text("bob-tool", "alice"))
-    registry.commit("claim bob-tool")
-    registry.git("checkout", "-q", "main")
-    registry.write("entries/alice-tool.md", entry_text("alice-tool", "alice", body="edited on main"))
-    before = registry.commit("edit alice-tool")
-    registry.git("merge", "-q", "--no-ff", "-m", "Merge claim", "jocasta/claim-bob-tool-alice")
+    # Without --event the validator cannot tell a push from a pull_request
+    # checkout, so it keeps the behaviour from before the flag existed.
+    before = merge_foreign_edit_on_main(registry)
     failures, notices = registry.authorize(before, "alice")
     assert failures == []
     assert len(notices) == 1 and "skipped" in notices[0] and "merge commit" in notices[0]
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_merge_commit_on_any_event_but_pull_request_is_checked(registry, event):
+    # sec1: a local `git merge --no-ff`, or clicking Merge on one's own PR, is a
+    # push whose HEAD has two parents. It is checked like any other push.
+    before = merge_foreign_edit_on_main(registry)
+    failures, notices = registry.authorize(before, "alice", event=event)
+    assert_authorization_lines(failures, "entries/bob-tool.md")
+    assert notices == ["authorization: 1 changed registry file(s) checked for alice"]
+
+
+def test_pull_request_event_is_skipped_with_a_notice(registry):
+    before = merge_foreign_edit_on_main(registry)
+    failures, notices = registry.authorize(before, "alice", event="pull_request")
+    assert failures == []
+    assert len(notices) == 1 and "skipped" in notices[0] and "pull_request" in notices[0]
+
+
+def test_pull_request_event_is_skipped_whatever_the_checkout_looks_like(registry):
+    # The skip is decided by the event, not by counting HEAD's parents.
+    registry.write("entries/bob-tool.md", entry_text("bob-tool", "alice"))
+    registry.commit("take bob-tool")
+    failures, notices = registry.authorize(registry.base, "alice", event="pull_request")
+    assert failures == []
+    assert len(notices) == 1 and "skipped" in notices[0] and "pull_request" in notices[0]
+
+
+def test_workflow_actor_is_skipped_on_a_push_event(registry):
+    # A consensus merge is a push of a merge commit by the instance's own workflow.
+    before = merge_foreign_edit_on_main(registry)
+    failures, notices = registry.authorize(before, "github-actions[bot]", event="push")
+    assert failures == []
+    assert len(notices) == 1 and "skipped" in notices[0] and "github-actions[bot]" in notices[0]
 
 
 def test_ordinary_commit_after_a_merge_is_still_checked(registry):
@@ -548,6 +594,42 @@ def test_cli_schema_and_authorization_failures_are_both_reported(registry):
     assert result.returncode == 1
     assert "entries/bob-tool.md: kind: " in result.stdout
     assert "entries/bob-tool.md: authorization: " in result.stdout
+
+
+def test_cli_push_event_merge_commit_exits_1_and_prints_the_line(registry):
+    before = merge_foreign_edit_on_main(registry)
+    result = run_cli(
+        "--root", str(registry.root), "--offline", "--changed-only", before, "--actor", "alice", "--event", "push"
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    lines = result.stdout.strip().splitlines()
+    assert lines[0].startswith("authorization: 1 changed")
+    assert lines[1].startswith("entries/bob-tool.md: authorization: ")
+    assert not lines[-1].startswith("ok:")
+
+
+def test_cli_without_event_keeps_the_merge_commit_skip(registry):
+    # The composite action at an older tag does not pass --event; its behaviour is unchanged.
+    before = merge_foreign_edit_on_main(registry)
+    result = run_cli("--root", str(registry.root), "--offline", "--changed-only", before, "--actor", "alice")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = result.stdout.strip().splitlines()
+    assert lines[0].startswith("authorization: skipped") and "merge commit" in lines[0]
+    assert lines[-1] == "ok: 3 entries validated"
+
+
+def test_cli_event_needs_changed_only():
+    result = run_cli("--root", str(VALID), "--offline", "--event", "push")
+    assert result.returncode == 2
+    assert "--event" in result.stderr and "--changed-only" in result.stderr
+
+
+def test_cli_event_must_not_be_blank(registry):
+    result = run_cli(
+        "--root", str(registry.root), "--offline", "--changed-only", registry.base, "--actor", "alice", "--event", " "
+    )
+    assert result.returncode == 2
+    assert "--event" in result.stderr
 
 
 def test_cli_changed_only_and_actor_must_be_given_together():

@@ -1,7 +1,7 @@
 # Validates every push to the default branch and every pull request with the
 # machinery's validator. The logic lives in mbarretta/jocasta; this file only
-# pins the release and says who did what, so the validator can check that a
-# push touched only entries its author owns.
+# pins the release and says who did what and on which event, so the validator
+# can check that a push touched only entries its author owns.
 name: validate
 
 on:
@@ -26,6 +26,9 @@ jobs:
         with:
           actor: ${{ github.actor }}
           base-ref: ${{ github.event.before || github.event.pull_request.base.sha }}
+          # A pull request's own run checks out GitHub's synthetic merge and is
+          # skipped; a push is checked even when it is a merge commit.
+          event: ${{ github.event_name }}
           # The workflow token can only see this repository. If your tools live
           # in private repositories, add a JOCASTA_TOKEN secret that can read
           # them; without it the workflow token is used as is.
