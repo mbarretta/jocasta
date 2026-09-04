@@ -1,6 +1,6 @@
 # Write paths: direct commit or pull request
 
-Every mode that changes the registry lands its change in one of two ways (charter D-3): a **direct commit** to the instance's default branch, or a **pull request** that the instance's `consensus-merge` workflow merges once it has the votes. Which one is decided here, once, by who the caller is relative to the file they are touching. The model never chooses; it looks the situation up in the table and follows the recipe. The push authorization check in the instance's `validate.yml` (`validate.py --changed-only`) enforces the same table on the server side, so a direct commit that the table does not allow is rejected on push even if the skill gets it wrong (charter P-4, P-5).
+Every mode that changes the registry lands its change in one of two ways (charter D-3): a **direct commit** to the instance's default branch, or a **pull request** that the instance's `consensus-merge` workflow merges once it has the votes. Which one is decided here, once, by who the caller is relative to the file they are touching. The model never chooses; it looks the situation up in the table and follows the recipe. The push authorization check in the instance's `validate.yml` (`validate.py --changed-only`) enforces the same table on the server side, so a direct commit that the table does not allow is caught even if the skill gets it wrong: the workflow runs after the push lands and turns the run red with an `authorization` line. It does not undo the push; only branch protection turns a red check into a refusal (see Authorization on push, below) (charter P-4, P-5).
 
 Throughout, `<snapshot>` is `~/.cache/jocasta/<org>/<repo>` (SKILL.md, Snapshot), `<login>` is the caller's GitHub login from `gh api user --jq .login`, and `<default>` is the instance's default branch (`gh api repos/<org>/<repo> --jq .default_branch`).
 
@@ -18,12 +18,14 @@ Throughout, `<snapshot>` is `~/.cache/jocasta/<org>/<repo>` (SKILL.md, Snapshot)
 | `claim <name>` | not the owner (the usual case: the entry is unowned) | PR | Branch `jocasta/claim-<name>-<login>`, label `ownership`. |
 | `claim <name>` | already the owner | nothing to do | Say so; nothing written. |
 | `adopt <name>` / `unadopt <name>` | anyone, editing only their own login | direct commit | `adoption.yaml` only. Commit message `adopt <name>` / `unadopt <name>`. `references/adoption.md`. |
-| edit `adoption.yaml` for another login | anyone | refused | Adoption is self-declared; the validator rejects the push. |
+| edit `adoption.yaml` for another login | anyone | refused | Adoption is self-declared; the validator turns the push's `validate` run red. |
 | flag a dead source | the `stale-sweep` workflow, not a person | PR | Branch `jocasta/stale-<name>`, labels `stale-source` and `deprecation`, `route: stale-source`. Opened by the machinery, merged by consensus or closed by the owner after fixing the source. |
 
 The rule behind the table: **touching an entry you do not own is never silent** (P-5). If the caller owns the file, or is editing only their own line in `adoption.yaml`, the change is theirs and commits directly. Anything else leaves a reviewable artifact that other people decide on. No mode edits more than one file per write, and no mode ever deletes an entry file: entries are deprecated, not deleted.
 
 The `deprecate` and `claim` protocols themselves, including what goes in the frontmatter and the closing messages, are in `references/ownership.md`. This file only says how the change reaches the repo.
+
+Four modes are outside the table because they never write to a registry that has other people's work in it. `search` and `show` read only. `connect` writes only `~/.config/jocasta/config.yaml`. `init` commits and pushes `Initialize jocasta registry` to a repo it has just created, empty and with no other author yet, which SKILL.md's mode table calls `direct commit (to the new repo)`; the steps are in `references/init-connect.md`.
 
 ## Direct commit recipe
 
@@ -103,7 +105,7 @@ A pushed branch whose PR could not be opened (step 6 failed) is reported as exac
 
 `scripts/consensus_merge.py`, run by the instance's `consensus-merge` workflow on every open, label, push, and review event:
 
-- refuses (comments once, does not merge) any PR that does not change exactly one `entries/<name>.md`, including deletions and renames;
+- refuses (comments once, does not merge) any PR whose changed-file set is not exactly one file matching `entries/<name>.md`, with a kebab-case name, directly under `entries/`: two or more files, `adoption.yaml`, `entries/README.md`, a file in a subdirectory of `entries/`, a deleted entry, and a renamed entry all fail this gate;
 - reads the entry's owner from the default branch; an entry that is unowned (`owner: ~`) or new has no owner;
 - merges when the owner's latest review is an approval (route `owner`), or when two distinct non-owner voices exist: the author (if not the owner) plus reviewers whose latest review is an approval (route `consensus`);
 - does not merge while the owner's latest review requests changes, and says so once in a comment;
@@ -113,6 +115,10 @@ A pushed branch whose PR could not be opened (step 6 failed) is reported as exac
 
 Because the merge is a squash of a one-file branch, the resulting commit on `<default>` looks exactly like a direct commit of the same edit. The full decision rules with worked examples are in `references/ownership.md`.
 
+One trigger caveat for the `stale-source` row. A PR that `stale_sweep.py` opens with the workflow's own `GITHUB_TOKEN` does not start the `consensus-merge` workflow's `opened` run, because GitHub does not let a workflow token trigger further workflows; the same goes for the instance's `validate` run on that PR. The script first runs on the first human event on the PR: a review, a label, or a push to its branch. A team that wants the sweep's PRs treated like a person's from the moment they open sets the `JOCASTA_TOKEN` secret to a personal access token or GitHub App token; the template's `stale-sweep.yml` passes it through when present. Nothing in this file changes for the skill: it never opens `stale-source` PRs itself.
+
 ## Authorization on push
 
-The instance's `validate.yml` runs `validate.py --changed-only <before> --actor <pusher>` on every push to the default branch. It rejects a direct push that adds an entry the pusher does not own, edits an entry the pusher did not own before the push (transfer and release by the owner are allowed), deletes an entry, or changes any login but the pusher's own in `adoption.yaml`. Merges performed by the consensus workflow are exempt; the PR path already gated them. This is the mechanism that makes the direct-commit column safe to offer at all (charter P-4); the details are in `references/adoption.md` and `scripts/validate.py`.
+The instance's `validate.yml` runs `validate.py --changed-only <before> --actor <pusher>` on every push to the default branch, after the push has landed. It turns the run red, with one `authorization` line, for a direct push that adds an entry the pusher does not own, edits an entry the pusher did not own before the push (transfer and release by the owner are allowed), deletes an entry, or changes any login but the pusher's own in `adoption.yaml`. It does not reject or revert the push: git has already accepted it, and the red run is the signal to a person to revert. Merges performed by the consensus workflow are exempt; the PR path already gated them.
+
+Two limits follow, and the same repository setting backstops both. A red run only blocks the branch when branch protection on the default branch requires the `validate` status check. And the exemption is a shape test, not a provenance test: the check skips any `HEAD` with two parents (and any push by `github-actions[bot]`) because that is what a PR merge looks like, so someone with push access can wrap an edit to another person's entry in a local `git merge --no-ff` and push a merge commit the check waves through; requiring pull requests on the default branch closes that. `init` sets up neither; a repository admin does, once. This is the mechanism that makes the direct-commit column safe to offer at all (charter P-4); the rule's full reach is in `references/adoption.md` and the code in `scripts/validate.py`.

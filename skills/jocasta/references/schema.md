@@ -142,6 +142,8 @@ A violation prints `<file>: authorization: <detail>; open a PR instead`. When
 `REF` is the all-zeros SHA of a first push or is not a commit in the checkout,
 every registry file is treated as added and the same rules apply. The check is
 skipped, with a printed notice, when the actor is `github-actions[bot]` or
-`HEAD` is a merge commit: both mean a pull request that review and the
-consensus action already gated. `references/adoption.md` describes what the
-workflow passes as `REF` and where the rule's reach ends.
+`HEAD` is a merge commit: both are the shape a pull request merge takes, which
+review and the consensus action already gated. The skip tests shape, not
+provenance, and the workflow runs after the push has landed; `references/adoption.md`
+describes what the workflow passes as `REF`, where the rule's reach ends, and
+the branch protection that backstops it.

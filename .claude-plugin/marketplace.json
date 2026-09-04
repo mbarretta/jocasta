@@ -1,0 +1,15 @@
+{
+  "name": "jocasta",
+  "owner": {
+    "name": "Michael Barretta",
+    "url": "https://github.com/mbarretta"
+  },
+  "description": "Single-plugin marketplace for jocasta, the team tool archive: a GitHub registry repo searched and edited through one Claude Code skill.",
+  "plugins": [
+    {
+      "name": "jocasta",
+      "source": "./",
+      "description": "Describe a need in prose and learn what already answers to it, who owns it, and whether it is still alive; register, retire, adopt, and hand off tools with every write checked by a validator. Includes the instance template that `init` copies to create a team's registry repo."
+    }
+  ]
+}

@@ -20,17 +20,19 @@ why registering must stay cheap and why you should register what you build.
 ## Install the skill
 
 The registry is used through the `jocasta` plugin for Claude Code, which lives
-in the machinery repo at <https://github.com/mbarretta/jocasta>. Install it
-once, then connect it to this registry:
+in the machinery repo at <https://github.com/mbarretta/jocasta>. That repo is
+its own plugin marketplace, so install it once, inside Claude Code:
 
 ```
 /plugin marketplace add mbarretta/jocasta
 /plugin install jocasta@jocasta
 ```
 
-then, in any project, tell the skill which registry to use with
-`jocasta connect <owner>/<repo>` naming this repository. The machinery repo's
-README is the authoritative install guide if these commands change.
+(or `claude plugin marketplace add mbarretta/jocasta` and
+`claude plugin install jocasta@jocasta` from a shell). Then point the skill at
+this registry with `jocasta connect <owner>/<repo>`, naming this repository.
+The machinery repo's README is the authoritative install guide if these
+commands change.
 
 From there, speak to the skill in prose:
 
@@ -47,19 +49,35 @@ Three thin workflows under `.github/workflows/` call the machinery's actions at
 a pinned release (`machinery_ref` in `jocasta.yaml`):
 
 - `validate` runs on every push to the default branch and every pull request
-  and rejects entries that do not fit the schema, point at an unreachable
-  source, lack an owner, reuse a name, or touch an entry the author does not
-  own.
+  and turns the run red for any entry that does not fit the schema, points at
+  an unreachable source, lacks an owner, or reuses a name, and for any direct
+  push that touches an entry the pusher does not own or another person's line
+  in `adoption.yaml`. It runs after the push has landed, so a red run is a
+  signal to revert, not a wall; see the note on branch protection below.
 - `consensus-merge` merges a deprecation or ownership pull request when the
   entry's owner approves it, or when two people who are not the owner agree.
+  It only ever merges a pull request that changes exactly one
+  `entries/<name>.md`; anything else gets one explanatory comment and stays
+  open.
 - `stale-sweep` checks every active entry's source weekly and opens a pull
   request proposing deprecation when a source has gone away. Fix the source and
   close the pull request to dismiss it.
 
 The workflows run with the repository's own token, which can read only this
-repository. If your tools live in private repositories, add a repository
-secret named `JOCASTA_TOKEN` holding a token that can read them, so that
-`validate` and `stale-sweep` can confirm each source is still there.
+repository and cannot trigger other workflows. Two consequences, both fixed by
+one secret: if your tools live in private repositories, `validate` and
+`stale-sweep` cannot confirm their sources are still there; and a pull request
+opened by `stale-sweep` does not start `consensus-merge` until a person reviews
+it, labels it, or pushes to its branch. Add a repository secret named
+`JOCASTA_TOKEN` holding a personal access token or GitHub App token that can
+read those repositories, and both workflows use it instead.
+
+Branch protection is not set up for you. `validate` cannot undo a push it
+flags, and it skips merge commits (that is how the pull request path lands),
+so someone with push access could wrap an edit in a local merge commit that the
+check waves through. To make a red check block the default branch, enable
+branch protection requiring the `validate` status check; to make every change
+reviewable, require pull requests as well.
 
 Nothing in this repository is deployed. If a workflow needs to change, the
 change belongs in the machinery repo; this repo only pins the version.

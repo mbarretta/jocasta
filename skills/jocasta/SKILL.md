@@ -19,15 +19,15 @@ Every mode refreshes the snapshot first (see Snapshot), then follows its referen
 | `show <name>` | Print one entry, its frontmatter and body, and who has adopted it. | `references/search.md` | none |
 | `register` | Guided interview from a source URL; overlap report before anything is written; validator runs; owner defaults to the caller. | `references/register.md` | direct commit |
 | `deprecate <name>` | Mark a tool retired. The owner does it directly; anyone else opens a PR that the consensus action merges on two non-owner voices. | `references/ownership.md` | direct commit (owner) or PR (non-owner) |
-| `transfer <name> <login>` | Hand an entry to a named successor. Owner only. | `references/ownership.md` | direct commit |
-| `release <name>` | Give up ownership; the entry stays active and shows as unowned. Owner only. | `references/ownership.md` | direct commit |
+| `transfer <name> <login>` | Hand an entry to a named successor. Owner only. | `references/ownership.md` | direct commit (owner only) |
+| `release <name>` | Give up ownership; the entry stays active and shows as unowned. Owner only. | `references/ownership.md` | direct commit (owner only) |
 | `claim <name>` | Ask to become the owner, usually of an unowned entry. | `references/ownership.md` | PR |
 | `adopt <name>` | Record that the caller uses the tool (their own login under the tool in `adoption.yaml`). | `references/adoption.md` | direct commit |
 | `unadopt <name>` | Remove the caller's own login from the tool's adopters. | `references/adoption.md` | direct commit |
 | `init <org>/<name> [--public]` | Create a new registry repo from `template/`, push it, and point this machine at it. Nothing is deployed. | `references/init-connect.md` | direct commit (to the new repo) |
 | `connect <org>/<repo>` | Point this machine at an existing registry. Writes local config only. | `references/init-connect.md` | none |
 
-Which modes commit directly and which open a PR is decided once, in `references/write-paths.md` (the D-3 table, with the push-rejection retry recipe). The entry file format, `jocasta.yaml`, and `adoption.yaml` are specified in `references/schema.md`; the submitter never sees that file, but you write to it exactly.
+Which modes commit directly and which open a PR is decided once, in `references/write-paths.md` (the D-3 table, with the push-rejection retry recipe); the write-path column above only summarizes that table, and `search`, `show`, `init`, and `connect` are named there as the modes outside it. The entry file format, `jocasta.yaml`, and `adoption.yaml` are specified in `references/schema.md`; the submitter never sees that file, but you write to it exactly.
 
 If a request names none of these modes, it is almost always `search`. "Is there something for parsing APK manifests?" is a search. "I built a thing" is a `register`. "Nobody uses X anymore" is a `deprecate`.
 
@@ -83,7 +83,7 @@ Without `uv`:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate.py" --root ~/.cache/jocasta/<org>/<repo>
 ```
 
-The script needs PyYAML and nothing else. If `python3` reports `ModuleNotFoundError: No module named 'yaml'`, tell the user to run `python3 -m pip install pyyaml` (or install `uv`) and stop. Add `--offline` only when the network is genuinely unavailable and say so in the response; the instance's own CI will still check reachability on push.
+The script needs PyYAML and nothing else. If `python3` reports `ModuleNotFoundError: No module named 'yaml'`, tell the user to run `python3 -m pip install pyyaml` (or install `uv`) and stop. Add `--offline` only when the network is genuinely unavailable and say so in the response; the instance's `validate` workflow re-checks reachability after the push lands and turns the run red if the source does not answer.
 
 Exit 0 means clean. Exit 1 prints one plain line per failure in the form `entries/<file>: <rule>: <detail>`; relay those lines exactly.
 

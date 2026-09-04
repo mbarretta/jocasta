@@ -113,7 +113,7 @@ Only after the gate. Every step runs against the snapshot, never against a worki
    uv run --project "${CLAUDE_PLUGIN_ROOT}" python "${CLAUDE_PLUGIN_ROOT}/scripts/validate.py" --root <snapshot>
    ```
 
-   (or the `python3` form from SKILL.md's "Running the validator locally" section when `uv` is absent). Exit 0 continues. On exit 1, show the output verbatim, one line per failure, and fix the entry: a `name` failure goes back to the name step, a `source` failure means the URL is wrong or unreachable and the submitter must say which, a `body` failure means the draft came out empty. Re-run until it exits 0. Never bypass a failure, never add `--offline` to dodge a reachability check, and never commit a red validator; the validator is the gate (P-4, R-6), and the instance's CI would refuse the push anyway.
+   (or the `python3` form from SKILL.md's "Running the validator locally" section when `uv` is absent). Exit 0 continues. On exit 1, show the output verbatim, one line per failure, and fix the entry: a `name` failure goes back to the name step, a `source` failure means the URL is wrong or unreachable and the submitter must say which, a `body` failure means the draft came out empty. Re-run until it exits 0. Never bypass a failure, never add `--offline` to dodge a reachability check, and never commit a red validator; the validator is the gate (P-4, R-6), and the instance's `validate` workflow runs the same checks after the push lands, so a red validator here is a red run there.
 
 4. **Commit** the one file, with the fixed message:
 
@@ -142,7 +142,7 @@ Only after the gate. Every step runs against the snapshot, never against a worki
 
    `references/write-paths.md` holds the same rebase-retry recipe for every direct-commit mode; this is the D-3 direct path for an entry the caller owns.
 
-7. **Authorization on push** is the instance's `validate.yml` running `--changed-only` with the pusher as actor: a new entry must be owned by the actor. Because `owner` defaults to the caller, this passes by construction. If the user later reports that run red, the machinery is at fault or the login was wrong; the skill never edits `owner` to make it pass.
+7. **Authorization on push** is the instance's `validate.yml` running `--changed-only` with the pusher as actor, after the push has landed: a new entry must be owned by the actor, or the run turns red with an `authorization` line. The push itself is not undone; only branch protection requiring that check turns a red run into a refusal (`references/write-paths.md`, Authorization on push). Because `owner` defaults to the caller, this passes by construction. If the user later reports that run red, the machinery is at fault or the login was wrong; the skill never edits `owner` to make it pass.
 
 ## Closing message
 
