@@ -166,7 +166,7 @@ pin this repo's composite actions at a tag:
 
 | Workflow (instance) | Action (machinery) | What it runs |
 |---|---|---|
-| `validate.yml`, on every push to the default branch and every pull request | `mbarretta/jocasta/.github/actions/validate@v1` | `scripts/validate.py --root $GITHUB_WORKSPACE --changed-only <before> --actor <pusher>`: every schema rule, plus the authorization rule that a direct push may only add an entry the pusher owns, edit an entry the pusher owned before the push, or change the pusher's own line in `adoption.yaml`. Entries are deprecated, never deleted. |
+| `validate.yml`, on every push to the default branch and every pull request | `mbarretta/jocasta/.github/actions/validate@v1` | `scripts/validate.py --root $GITHUB_WORKSPACE --changed-only <before> --actor <pusher> --event <event>`: every schema rule, plus the authorization rule that a direct push may only add an entry the pusher owns, edit an entry the pusher owned before the push, or change the pusher's own line in `adoption.yaml`. Entries are deprecated, never deleted. |
 | `consensus-merge.yml`, on pull request open, label, push, and review | `mbarretta/jocasta/.github/actions/consensus-merge@v1` | `scripts/consensus_merge.py --repo <repo> --pr <n>`: the one-file gate and the owner-or-two-voices rule above. |
 | `stale-sweep.yml`, weekly and on demand | `mbarretta/jocasta/.github/actions/stale-sweep@v1` | `scripts/stale_sweep.py --root $GITHUB_WORKSPACE --repo <repo> [--dry-run]`: the stale-source route above. |
 
@@ -183,15 +183,19 @@ ships as a new tag and a new schema version together.
 
 What the push check does and does not do, so nobody mistakes it for more than
 it is. `validate.yml` runs after a push has landed; a violation turns that run
-red with one `authorization` line, it does not undo the commit. The check also
-skips any push whose `HEAD` is a merge commit, or that was made by
-`github-actions[bot]`, because those are how the pull request path lands; it
-does not verify the merge came from a pull request, so someone with push
-access can wrap an edit in a local `git merge --no-ff` and push a two-parent
-commit the check waves through. The backstop for both is branch protection on
-the instance's default branch: require the `validate` status check, and
-require pull requests if the team wants every change reviewable. `init` does
-not set these; a repository admin does, once.
+red with one `authorization` line, it does not undo the commit. The check
+skips a `pull_request` event's run (the workflow passes `github.event_name` as
+`--event`; that checkout is GitHub's synthetic merge, and the pull request
+path is gated by review and `consensus-merge`) and any push made by
+`github-actions[bot]`. A `push` is checked even when `HEAD` is a merge commit,
+so a local `git merge --no-ff` of someone else's entry, or clicking Merge on
+one's own pull request, goes red for whoever pushed or merged it. Red after
+the fact is all the check can do, and the pull request's own run passes by
+construction, so requiring the `validate` status check alone does not stop a
+self-merge from landing. The backstop is branch protection on the instance's
+default branch that requires the `validate` status check, requires pull
+requests, and requires at least one approving review. `init` does not set
+these; a repository admin does, once.
 
 ## Layout
 

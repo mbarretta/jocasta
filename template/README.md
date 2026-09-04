@@ -73,11 +73,13 @@ it, labels it, or pushes to its branch. Add a repository secret named
 read those repositories, and both workflows use it instead.
 
 Branch protection is not set up for you. `validate` cannot undo a push it
-flags, and it skips merge commits (that is how the pull request path lands),
-so someone with push access could wrap an edit in a local merge commit that the
-check waves through. To make a red check block the default branch, enable
-branch protection requiring the `validate` status check; to make every change
-reviewable, require pull requests as well.
+flags, and a pull request's own run is skipped (the pull request path is gated
+by review and `consensus-merge` instead), so someone with push access could
+open a pull request that edits another person's entry and merge it themselves;
+the merge turns the next `validate` run red, after it has landed. To make a red
+check block the default branch, enable branch protection requiring the
+`validate` status check; to close the self-merge path, it must also require
+pull requests and at least one approving review.
 
 Nothing in this repository is deployed. If a workflow needs to change, the
 change belongs in the machinery repo; this repo only pins the version.

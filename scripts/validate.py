@@ -3,7 +3,7 @@
 
 Usage::
 
-    validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN]
+    validate.py --root DIR [--offline] [--changed-only REF --actor LOGIN [--event NAME]]
 
 Exit status 0 when the registry is clean, 1 when any rule fails, 2 on a usage
 error. Every failure is one plain line on stdout::
@@ -36,8 +36,8 @@ Rules, by name (the middle field of each line):
 The schema this file enforces is documented, field by field, in
 ``skills/jocasta/references/schema.md``; the two must agree.
 
-Push authorization (``--changed-only REF --actor LOGIN``)
---------------------------------------------------------
+Push authorization (``--changed-only REF --actor LOGIN [--event NAME]``)
+-----------------------------------------------------------------------
 
 The schema rules say whether the registry is well formed; the authorization
 rule says whether *this push* was the actor's to make (charter D-3: your own
@@ -59,11 +59,18 @@ sides of every change from git, so it needs a checkout with history
 A violation prints ``<file>: authorization: <detail>; open a PR instead``. When
 REF is the all-zeros SHA GitHub sends for a first push, or is not a commit in
 the checkout, every registry file is treated as added and the rules above
-still apply. The check is skipped, with a printed notice, when the actor is
-``github-actions[bot]`` or HEAD is a merge commit: both mean a pull request
-that review and the consensus action already gated. On ``pull_request``
-events the workflow's checkout is GitHub's synthetic merge commit, so PRs are
-skipped by construction.
+still apply.
+
+The check is skipped, with a printed notice, when the actor is
+``github-actions[bot]`` (a consensus merge, which the PR path already gated)
+or when ``--event`` is ``pull_request`` (the workflow's checkout is GitHub's
+synthetic merge commit of the PR, gated the same way). ``--event`` is
+``github.event_name``, passed by the composite action. On every other event
+(``push``), and when ``--event`` is not given at all, HEAD is checked whether
+or not it is a merge commit, so a local ``git merge --no-ff`` of someone
+else's entry, or a collaborator clicking Merge on their own PR, turns the run
+red for the person who pushed it. Counting HEAD's parents is never a skip:
+that is a shape test a local merge passes.
 
 Only the standard library and PyYAML are used, so the script runs under a
 plain ``python3`` with ``pip install pyyaml`` as well as under ``uv run``.
@@ -99,6 +106,8 @@ _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 FIRST_PUSH_SHA = "0" * 40
 # The actor of a push made by the instance's own workflows (a consensus merge).
 WORKFLOW_ACTOR = "github-actions[bot]"
+# The GitHub event whose checkout is the synthetic merge commit of a pull request.
+PULL_REQUEST_EVENT = "pull_request"
 AUTHORIZATION_RULE = "authorization"
 _OPEN_A_PR = "open a PR instead"
 
@@ -303,8 +312,16 @@ def _check_adoption(adoption: dict, valid_names: set[str]) -> list[str]:
 # --- push authorization (--changed-only) -------------------------------------
 
 
-def check_authorization(root: Path | str, ref: str, actor: str) -> tuple[list[str], list[str]]:
+def check_authorization(
+    root: Path | str, ref: str, actor: str, event: str | None = None
+) -> tuple[list[str], list[str]]:
     """Return ``(failures, notices)`` for the push that took ``root`` from ``ref`` to HEAD.
+
+    ``event`` is the GitHub event name behind the checkout. ``pull_request``
+    is skipped (the checkout is GitHub's synthetic merge, gated by the PR
+    path); any other event, and ``None`` (the caller did not say), is checked
+    even when HEAD is a merge commit. The only other skip is the instance's
+    own workflow actor.
 
     Failures use the same one-line format as the schema rules, under the rule
     name ``authorization``. Notices are informational lines for the log: what
@@ -314,10 +331,8 @@ def check_authorization(root: Path | str, ref: str, actor: str) -> tuple[list[st
     root = Path(root)
     if _same_login(actor, WORKFLOW_ACTOR):
         return [], [f"{AUTHORIZATION_RULE}: skipped; {actor} is the instance's own workflow and the PR path already gated this push"]
-
-    head, *parents = jc.git_output(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).split()
-    if len(parents) > 1:
-        return [], [f"{AUTHORIZATION_RULE}: skipped; HEAD {head[:12]} is a merge commit and the PR path already gated it"]
+    if event == PULL_REQUEST_EVENT:
+        return [], [f"{AUTHORIZATION_RULE}: skipped; a {event} event checks out GitHub's synthetic merge commit and the PR path gates it"]
 
     notices: list[str] = []
     base, changes = _changed_registry_files(root, ref, notices)
@@ -493,6 +508,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="also check that every file changed between REF and HEAD was the actor's to change directly (needs --actor)",
     )
     parser.add_argument("--actor", metavar="LOGIN", help="GitHub login whose push is being checked (needs --changed-only)")
+    parser.add_argument(
+        "--event",
+        metavar="NAME",
+        help=(
+            "GitHub event behind the checkout (github.event_name): pull_request skips the authorization check; "
+            "any other event, or no --event at all, checks HEAD even when it is a merge commit (needs --changed-only)"
+        ),
+    )
     return parser
 
 
@@ -503,6 +526,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--changed-only and --actor must be given together")
     if args.actor is not None and not args.actor.strip():
         parser.error("--actor must be a GitHub login")
+    if args.event is not None and args.changed_only is None:
+        parser.error("--event needs --changed-only")
+    if args.event is not None and not args.event.strip():
+        parser.error("--event must be a GitHub event name")
     if not args.root.is_dir():
         print(f"validate.py: --root {args.root} is not a directory", file=sys.stderr)
         return 2
@@ -513,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     notices: list[str] = []
     if args.changed_only is not None:
         try:
-            auth_failures, notices = check_authorization(args.root, args.changed_only, args.actor)
+            auth_failures, notices = check_authorization(args.root, args.changed_only, args.actor, event=args.event)
         except jc.GitError as exc:
             print(f"validate.py: --changed-only: {exc}", file=sys.stderr)
             return 2
