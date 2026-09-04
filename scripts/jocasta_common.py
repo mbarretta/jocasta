@@ -18,6 +18,9 @@ a GitHub Actions job. The public building blocks:
   binary (and, for ``gh_ok``, a nonzero exit) into ``GhError`` so the scripts
   that open and merge pull requests report one failure line instead of a
   traceback. ``repo_arg`` is the argparse type for their ``--repo OWNER/REPO``.
+- ``same_login(a, b)``: compare two GitHub logins the way GitHub does, without
+  regard to case, so an ``owner`` typed as ``Alice`` still matches the ``alice``
+  the API reports.
 """
 
 from __future__ import annotations
@@ -192,6 +195,17 @@ def _load_yaml_mapping(path: Path, problems: list[tuple[str, str]], *, required:
 def is_kebab(name: object) -> bool:
     """Lower-case words of ``[a-z0-9]`` joined by single hyphens."""
     return isinstance(name, str) and bool(_KEBAB_RE.match(name))
+
+
+def same_login(a: object, b: object) -> bool:
+    """Whether two GitHub logins name the same account.
+
+    GitHub logins are case-insensitive, and an entry's ``owner`` is whatever a
+    person typed, so every owner/actor/reviewer comparison in the scripts goes
+    through here rather than ``==``. Anything that is not a non-empty string
+    (``~`` parsed as ``None``, a missing key) matches nothing, not even itself.
+    """
+    return isinstance(a, str) and isinstance(b, str) and bool(a) and a.casefold() == b.casefold()
 
 
 def is_iso_date(value: object) -> bool:

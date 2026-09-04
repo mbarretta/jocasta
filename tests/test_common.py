@@ -130,6 +130,18 @@ def test_is_kebab_rejects(name):
     assert not jc.is_kebab(name)
 
 
+@pytest.mark.parametrize("a, b", [("alice", "alice"), ("Alice", "alice"), ("ALICE", "aLiCe"), ("octo-cat", "Octo-Cat")])
+def test_same_login_ignores_case(a, b):
+    # GitHub logins are case-insensitive; the API and the entry may spell one differently.
+    assert jc.same_login(a, b)
+    assert jc.same_login(b, a)
+
+
+@pytest.mark.parametrize("a, b", [("alice", "alicia"), ("alice", "alice2"), ("alice", ""), ("", ""), ("alice", None), (None, None), ("alice", 1), ("alice", ["alice"])])
+def test_same_login_rejects_different_or_non_string_logins(a, b):
+    assert not jc.same_login(a, b)
+
+
 @pytest.mark.parametrize("value", [dt.date(2026, 9, 4), "2026-09-04"])
 def test_is_iso_date_accepts(value):
     assert jc.is_iso_date(value)

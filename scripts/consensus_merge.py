@@ -16,10 +16,31 @@ Rules, in the order they are applied (charter R-5, D-3, P-4, P-5):
 2. The PR must change exactly one file, and that file must be
    ``entries/<name>.md`` (not ``entries/README.md``, not a deletion, not a
    rename). Anything else gets one explanatory comment and no merge.
-3. The entry's ``owner`` is read from the default branch. An entry that is
-   absent there, or whose owner is ``~`` (released), has no owner.
-4. Each reviewer's *latest* review is what counts (a dismissed approval is
-   gone). Then:
+3. The entry's ``owner`` is read from the default branch. An owner of ``~``
+   (released) means no owner. An entry that is not on the default branch is
+   a new entry, which only its owner may add by direct commit: not merged.
+4. The change itself must be one of the two shapes a consensus PR carries
+   (both sides are parsed, not diffed as text):
+
+   - a **deprecation**: ``status`` goes ``active`` -> ``deprecated`` and a
+     ``deprecated`` block appears whose ``route`` is ``owner`` or
+     ``consensus``; every other field is unchanged and the body is unchanged
+     or only appended to;
+   - a **claim**: ``owner`` becomes the PR author's login and nothing else
+     changes.
+
+   Anything else (``install``, ``source``, ``kind``, a rewritten body, a
+   claim naming someone other than the author) gets one comment and no
+   merge, whatever the votes say. ``install`` is the line teammates copy and
+   run, so two votes must not be able to change it.
+5. Only reviews from repository insiders count: ``author_association`` is
+   ``OWNER``, ``MEMBER``, or ``COLLABORATOR``. ``[bot]`` accounts and, on a
+   public instance, outside accounts are ignored. The PR author is a voice
+   only under the same test.
+6. Each reviewer's *latest* ``APPROVED``, ``CHANGES_REQUESTED``, or
+   ``DISMISSED`` review is what counts (a dismissed approval is gone; a later
+   ``COMMENTED`` or ``PENDING`` review changes nothing). Logins are compared
+   the way GitHub does, without regard to case. Then:
 
    - the owner's latest review is ``APPROVED``           -> merge, route ``owner``
    - the owner's latest review is ``CHANGES_REQUESTED``  -> comment once, no merge
@@ -28,7 +49,7 @@ Rules, in the order they are applied (charter R-5, D-3, P-4, P-5):
      review is ``APPROVED``. Two or more -> merge, route ``consensus``.
      Fewer -> print how many are still needed and exit 0.
 
-5. Merges use ``gh pr merge --squash`` with a subject naming the route.
+7. Merges use ``gh pr merge --squash`` with a subject naming the route.
 
 Exit status: 0 whenever a decision was reached (merged or not), 1 when ``gh``
 is missing or a GitHub call fails, 2 on a usage error. Only the standard
@@ -48,6 +69,22 @@ import jocasta_common as jc
 PAGE_SIZE = 100
 VOICES_REQUIRED = 2
 ENTRY_PATH_RE = re.compile(r"^entries/([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
+
+# ``author_association`` values (on a PR or a review) that make an account a
+# repository insider. Anything else (NONE, CONTRIBUTOR, FIRST_TIMER, ...) is an
+# outside account, which on a public instance is anyone with a GitHub login.
+VOICE_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+# Review states that replace a reviewer's recorded state. COMMENTED and PENDING
+# say nothing about approval, so they must not overwrite a veto or an approval.
+COUNTED_REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
+
+# ``deprecated.route`` values a PR may carry; ``stale-source`` is the sweep's.
+PR_DEPRECATION_ROUTES = frozenset({"owner", "consensus"})
+
+# Stands in for a frontmatter key one side of a PR lacks, so "absent" and
+# "present with the value None" (``owner: ~``) compare as different.
+_ABSENT = object()
 
 # Every comment this script posts opens with a marker naming the situation it
 # explains, so a re-run stays quiet about a situation it already explained but
@@ -94,8 +131,8 @@ def gh_list(endpoint: str) -> list:
         page += 1
 
 
-def fetch_default_branch_entry(repo: str, path: str, ref: str) -> str | None:
-    """Raw text of ``path`` at ``ref``, or ``None`` when it is not there."""
+def fetch_entry_text(repo: str, path: str, ref: str) -> str | None:
+    """Raw text of ``path`` at ``ref`` (a branch or a commit SHA), or ``None`` when it is not there."""
     result = jc.gh(["api", "-H", "Accept: application/vnd.github.raw+json", f"repos/{repo}/contents/{path}?ref={ref}"])
     if result.returncode == 0:
         return result.stdout
@@ -108,7 +145,8 @@ def fetch_default_branch_entry(repo: str, path: str, ref: str) -> str | None:
 def comment_once(repo: str, pr: int, kind: str, body: str) -> bool:
     """Post ``body`` unless this script already explained ``kind`` on this PR.
 
-    ``kind`` names the situation (``files``, ``frontmatter``, ``blocked``).
+    ``kind`` names the situation (``files``, ``frontmatter``, ``scope``,
+    ``blocked``).
     Each is stable until a human acts, so one comment per situation is enough;
     a new situation on the same PR still gets its own comment.
     """
@@ -142,31 +180,47 @@ def the_one_entry(files: list[dict]) -> tuple[str | None, str]:
 
 
 def latest_review_states(reviews: list[dict]) -> dict[str, str]:
-    """Map each reviewer to the state of their most recent review, bots excluded."""
+    """Map each insider reviewer to their most recent counted review state.
+
+    Bots, outside accounts (``author_association`` not in
+    ``VOICE_ASSOCIATIONS``), and reviews whose state is not in
+    ``COUNTED_REVIEW_STATES`` are skipped. Two spellings of one login are one
+    reviewer; the key is the login as GitHub last reported it.
+    """
     ordered = sorted(reviews, key=lambda r: r.get("submitted_at") or "")
-    latest: dict[str, str] = {}
+    latest: dict[str, tuple[str, str]] = {}  # casefolded login -> (login, state)
     for review in ordered:
         login = (review.get("user") or {}).get("login")
         if not login or login.endswith("[bot]"):
             continue
-        latest[login] = review.get("state", "")
-    return latest
+        if review.get("author_association") not in VOICE_ASSOCIATIONS:
+            continue
+        state = review.get("state", "")
+        if state not in COUNTED_REVIEW_STATES:
+            continue
+        latest[login.casefold()] = (login, state)
+    return dict(latest.values())
 
 
-def decide(*, owner: str | None, author: str, latest_reviews: dict[str, str]) -> Decision:
-    """Apply the R-5 rules to the review state. Pure: no I/O."""
+def decide(*, owner: str | None, author: str, author_association: str | None, latest_reviews: dict[str, str]) -> Decision:
+    """Apply the R-5 rules to the review state. Pure: no I/O.
+
+    ``latest_reviews`` is ``latest_review_states``' output. Every login
+    comparison is case-insensitive (``jocasta_common.same_login``); the author
+    is a voice only when ``author_association`` marks them an insider.
+    """
     if owner is not None:
-        owner_state = latest_reviews.get(owner)
+        owner_state = next((state for login, state in latest_reviews.items() if jc.same_login(login, owner)), None)
         if owner_state == "APPROVED":
             return Decision("merge", route="owner", voices=[owner], reason=f"owner {owner} approved")
         if owner_state == "CHANGES_REQUESTED":
             return Decision("blocked", reason=f"owner {owner} requested changes")
 
     voices: list[str] = []
-    if author != owner and not author.endswith("[bot]"):
+    if author_association in VOICE_ASSOCIATIONS and not jc.same_login(author, owner) and not author.endswith("[bot]"):
         voices.append(author)
     for login in sorted(latest_reviews):
-        if latest_reviews[login] == "APPROVED" and login not in (owner, author):
+        if latest_reviews[login] == "APPROVED" and not jc.same_login(login, owner) and not jc.same_login(login, author):
             voices.append(login)
 
     if len(voices) >= VOICES_REQUIRED:
@@ -186,6 +240,53 @@ def owner_from_entry_text(text: str) -> str | None:
     frontmatter, _ = jc.parse_entry_text(text)
     owner = frontmatter.get("owner")
     return owner if isinstance(owner, str) and owner.strip() else None
+
+
+def change_in_scope(*, base_text: str | None, head_text: str | None, author: str) -> tuple[str | None, str]:
+    """Return ``(shape, "")`` when the PR's edit is one a consensus PR may carry, else ``(None, why)``.
+
+    ``shape`` is ``"deprecation"`` or ``"claim"`` (module docstring, rule 4).
+    Both sides are parsed with ``jocasta_common.parse_entry_text`` and compared
+    as values, so YAML quoting and trailing whitespace do not matter but every
+    field and the body do. Pure: no I/O.
+    """
+    if base_text is None:
+        return None, "it adds a new entry; a new entry is registered by its owner with a direct commit, and a PR can only deprecate or claim an entry that is already on the default branch"
+    if head_text is None:
+        return None, "the entry is missing at the head of the PR"
+    try:
+        base_fm, base_body = jc.parse_entry_text(base_text)
+        head_fm, head_body = jc.parse_entry_text(head_text)
+    except jc.EntryError as exc:
+        return None, f"its frontmatter cannot be read ({exc})"
+
+    changed = sorted(key for key in base_fm.keys() | head_fm.keys() if base_fm.get(key, _ABSENT) != head_fm.get(key, _ABSENT))
+    body_changed = head_body != base_body
+
+    if changed == ["deprecated", "status"] and _is_deprecation(base_fm, head_fm) and head_body.startswith(base_body):
+        return "deprecation", ""
+    if changed == ["owner"] and jc.same_login(head_fm.get("owner"), author) and not body_changed:
+        return "claim", ""
+
+    what = [f"`{key}`" for key in changed] + (["the body"] if body_changed else [])
+    if not what:
+        return None, "it changes nothing in the entry"
+    return None, (
+        f"it changes {', '.join(what)}; a consensus PR may only set `status: deprecated` with a `deprecated` block "
+        f"(route `owner` or `consensus`) and append to the body, or set `owner` to its author (`{author}`) with nothing else changed"
+    )
+
+
+def _is_deprecation(base_fm: dict, head_fm: dict) -> bool:
+    """``status`` went ``active`` -> ``deprecated`` and a well-routed block appeared where there was none."""
+    block = head_fm.get("deprecated")
+    return (
+        base_fm.get("status") == "active"
+        and head_fm.get("status") == "deprecated"
+        and "deprecated" not in base_fm
+        and isinstance(block, dict)
+        and block.get("route") in PR_DEPRECATION_ROUTES
+    )
 
 
 def merge_subject(verb: str, name: str, route: str) -> str:
@@ -214,21 +315,29 @@ def run(repo: str, pr_number: int) -> int:
             print(f"{tag}: not merged: {why}" + ("" if posted else " (already commented)"))
             return 0
 
+        path = files[0]["filename"]
         default_branch = pr["base"].get("repo", {}).get("default_branch") or pr["base"]["ref"]
-        entry_text = fetch_default_branch_entry(repo, files[0]["filename"], default_branch)
-        if entry_text is None:
+        base_text = fetch_entry_text(repo, path, default_branch)
+        if base_text is None:
             owner = None
         else:
             try:
-                owner = owner_from_entry_text(entry_text)
+                owner = owner_from_entry_text(base_text)
             except jc.EntryError as exc:
-                posted = comment_once(repo, pr_number, "frontmatter", f"Not merged: `{files[0]['filename']}` on `{default_branch}` has unreadable frontmatter ({exc}), so its owner cannot be determined. Fix the entry on `{default_branch}` first.")
+                posted = comment_once(repo, pr_number, "frontmatter", f"Not merged: `{path}` on `{default_branch}` has unreadable frontmatter ({exc}), so its owner cannot be determined. Fix the entry on `{default_branch}` first.")
                 print(f"{tag}: not merged: default-branch frontmatter unreadable: {exc}" + ("" if posted else " (already commented)"))
                 return 0
 
         author = pr["user"]["login"]
+        head_text = fetch_entry_text(repo, path, pr["head"]["sha"])
+        shape, why = change_in_scope(base_text=base_text, head_text=head_text, author=author)
+        if shape is None:
+            posted = comment_once(repo, pr_number, "scope", f"Not merged: {why}. A consensus PR carries exactly one of those two changes; everything else about `{name}` is its owner's to write by direct commit. This PR stays open; push a version that fits, or close it.")
+            print(f"{tag}: not merged: {why}" + ("" if posted else " (already commented)"))
+            return 0
+
         reviews = gh_list(f"repos/{repo}/pulls/{pr_number}/reviews")
-        decision = decide(owner=owner, author=author, latest_reviews=latest_review_states(reviews))
+        decision = decide(owner=owner, author=author, author_association=pr.get("author_association"), latest_reviews=latest_review_states(reviews))
 
         if decision.action == "blocked":
             posted = comment_once(repo, pr_number, "blocked", f"Not merged: `{owner}` owns `{name}` and has requested changes. This PR stays open for discussion; the owner can approve it, or it can be closed by hand.")

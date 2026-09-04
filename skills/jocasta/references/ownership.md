@@ -9,7 +9,7 @@ Deprecation has three routes, recorded in the entry's `deprecated.route` field: 
 1. Refresh the snapshot and resolve the caller's `<login>` (SKILL.md: Snapshot, Identity).
 2. Read `entries/<name>.md` from the snapshot. If there is no such file, stop with the archive wording: "`<name>` does not appear in the archive." Offer `search` if the user may have the name wrong.
 3. Note the entry's `owner`. `owner: ~` means the entry is **unowned** (released); say "unowned", never "orphaned" or "abandoned".
-4. Decide whether the caller is the owner: `owner == <login>`, exact match. This one comparison chooses the row in the write-paths table. The comparison is the skill's convenience; the push authorization check and the consensus script make the same comparison server-side, so a mistake here is caught: a wrong direct commit turns the instance's `validate` run red with an `authorization` line, and a wrong PR is not merged.
+4. Decide whether the caller is the owner: `owner` and `<login>` name the same GitHub account, compared without regard to case as GitHub does (`Alice` is `alice`). This one comparison chooses the row in the write-paths table. The comparison is the skill's convenience; the push authorization check and the consensus script make the same comparison server-side, so a mistake here is caught: a wrong direct commit turns the instance's `validate` run red with an `authorization` line, and a wrong PR is not merged.
 
 Every closing message opens with the plain statement of what was committed (path, commit SHA, repo) or which PR was opened (URL), before any character text (charter R-8). Templates are at the end of this file.
 
@@ -79,16 +79,18 @@ When the PR merges, the caller is the owner and every owner-only mode is theirs.
 
 1. **Already merged or closed:** nothing happens. The script never closes, reopens, or comments on a closed PR.
 2. **Exactly one `entries/<name>.md`:** a PR that changes any other set of files (two files, `adoption.yaml`, `entries/README.md`, a file in a subdirectory of `entries/`, a deleted or renamed entry) gets one comment explaining why and is not merged. Fix it by splitting the change; the PR stays open.
-3. **Owner from the default branch:** the script reads the entry as it is on the default branch, not as the PR would make it (otherwise a claim could approve itself). `owner: ~` or a file not yet on the default branch means **no owner**.
-4. **Latest review per person:** each reviewer's most recent review is the one that counts. An approval that was later dismissed or followed by "request changes" is gone. Reviews from `[bot]` accounts are ignored.
-5. **Owner approved:** merge, route `owner`.
-6. **Owner requested changes:** not merged, one comment. Two non-owner approvals do not override the owner; the PR stays open for discussion until the owner approves or someone closes it by hand.
-7. **Two non-owner voices:** the PR author (when they are not the owner) is one voice; every other reviewer who is neither the owner nor the author and whose latest review is an approval is another. Two or more: merge, route `consensus`. An unowned entry can only merge this way.
-8. **Otherwise:** wait. The workflow log says how many voices are still needed; the next review re-runs the script.
+3. **Owner from the default branch:** the script reads the entry as it is on the default branch, not as the PR would make it (otherwise a claim could approve itself). `owner: ~` means **no owner**. A file that is not on the default branch is a new entry, which only its owner may add by direct commit (`register`); a PR adding one gets one comment and is not merged, whatever the votes.
+4. **Only a deprecation or a claim:** the script parses the entry on both sides (default branch and PR head) and compares the values, so quoting and whitespace do not matter but every field and the body do. Exactly two shapes pass: a **deprecation** (`status: active` becomes `status: deprecated`, a `deprecated` block appears whose `route` is `owner` or `consensus`, every other field is unchanged, and the body is unchanged or has text appended) or a **claim** (`owner` becomes the PR author's login and nothing else changes). Any other change (`install`, `source`, `kind`, `name`, a rewritten body, a claim naming someone other than the author, a deprecation bundled with a claim) gets one comment naming the changed fields and is not merged, even with the owner's approval. Two votes can retire a tool or hand it over; they cannot edit the `install` line that teammates copy and run. Anything else is the owner's to change by direct commit.
+5. **Only insiders vote:** a review counts only when GitHub reports its author as `OWNER`, `MEMBER`, or `COLLABORATOR` of the instance repository; reviews from `[bot]` accounts and from outside accounts (`NONE`, `CONTRIBUTOR`, ...) are ignored. The PR author is a voice under the same test. On a public instance anyone with a GitHub account can open a PR or leave an approving review; this rule is what keeps the count to people the instance has let in.
+6. **Latest review per person:** each reviewer's most recent approval, "request changes", or dismissal is the one that counts. An approval that was later dismissed or followed by "request changes" is gone; a later plain comment (`COMMENTED`) changes nothing, so an owner who requests changes and then discusses in a comment is still blocking. Logins are matched the way GitHub matches them, without regard to case: `owner: Alice` is the reviewer `alice`.
+7. **Owner approved:** merge, route `owner`.
+8. **Owner requested changes:** not merged, one comment. Two non-owner approvals do not override the owner; the PR stays open for discussion until the owner approves or someone closes it by hand.
+9. **Two non-owner voices:** the PR author (when they are not the owner) is one voice; every other reviewer who is neither the owner nor the author and whose latest review is an approval is another. Two or more: merge, route `consensus`. An unowned entry can only merge this way.
+10. **Otherwise:** wait. The workflow log says how many voices are still needed; the next review re-runs the script.
 
-Merges are squash commits with the subject `<verb> <name> (route: <route>)`, where `<verb>` is `deprecate` for a `deprecation` label and `claim` for `ownership`. Re-running the script on the same PR is always safe; it comments at most once per situation (wrong file set, unreadable owner, owner requested changes), so a PR that is fixed and then blocked for a new reason still hears why. A `stale-source` PR opened with the workflow's own token does not start this workflow when it opens; the script first runs on the first human review, label, or push to the PR (`references/write-paths.md`, the trigger caveat).
+Merges are squash commits with the subject `<verb> <name> (route: <route>)`, where `<verb>` is `deprecate` for a `deprecation` label and `claim` for `ownership`. Re-running the script on the same PR is always safe; it comments at most once per situation (wrong file set, unreadable owner, out-of-scope change, owner requested changes), so a PR that is fixed and then blocked for a new reason still hears why. A `stale-source` PR opened with the workflow's own token does not start this workflow when it opens; the script first runs on the first human review, label, or push to the PR (`references/write-paths.md`, the trigger caveat).
 
-Worked outcomes, for an entry owned by `alice`:
+Worked outcomes, for an in-scope PR against an entry owned by `alice`, where everyone named is a collaborator of the instance:
 
 | PR author | Approvals (latest state) | Result |
 |---|---|---|
@@ -99,6 +101,9 @@ Worked outcomes, for an entry owned by `alice`:
 | `alice` | `bob`, `carol` | merged, route `consensus` |
 | `bob` | `carol`, `dave`; `alice` requested changes | not merged; one comment |
 | `bob` | `carol` approved, then dismissed | waits: 1 of 2 |
+| `bob` | `carol`; `alice` requested changes, then commented | not merged; the comment does not lift the block |
+| `bob` | `stranger` (not a collaborator) | waits: 1 of 2; an outside approval is not a voice |
+| `bob` (not a collaborator) | `carol` | waits: 1 of 2; an outside author is not a voice |
 
 For an unowned entry (`owner: ~`) the first two rows are the whole table: there is no owner to approve or to block, so two voices are needed and enough (charter R-5 "two non-owners' consensus").
 
