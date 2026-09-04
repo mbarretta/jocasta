@@ -12,6 +12,8 @@ a GitHub Actions job. The three public building blocks:
 - ``is_reachable(url)``: decide whether a tool's ``source`` URL answers,
   using ``gh api`` for github.com (works for private repos the caller can
   see) and an HTTP request for anything else.
+- ``run_git(root, args)`` / ``git_output(root, args)``: run ``git`` inside a
+  registry checkout, for the diff-scoped checks that compare two commits.
 """
 
 from __future__ import annotations
@@ -77,16 +79,25 @@ class Registry:
 
 
 def parse_entry(path: Path | str) -> tuple[dict, str]:
-    """Return ``(frontmatter, body)`` for an entry file.
+    """Return ``(frontmatter, body)`` for an entry file on disk.
 
-    The file must begin with a ``---`` line, contain a YAML mapping, and close
+    See ``parse_entry_text`` for the format; this only adds the read.
+    """
+    return parse_entry_text(Path(path).read_text(encoding="utf-8"))
+
+
+def parse_entry_text(text: str) -> tuple[dict, str]:
+    """Return ``(frontmatter, body)`` for the text of an entry file.
+
+    The text must begin with a ``---`` line, contain a YAML mapping, and close
     that mapping with another ``---`` line. The first ``---`` line after the
     opener is the closing fence, so no frontmatter line may consist of ``---``
     on its own (a block scalar containing one would be cut short). The body is
     everything after the closing fence with surrounding whitespace stripped;
     it may be empty here (the validator decides whether that is acceptable).
+    Taking text rather than a path lets a caller parse an entry as it was at
+    an earlier commit (``git show REF:path``) without a temporary file.
     """
-    text = Path(path).read_text(encoding="utf-8")
     lines = text.splitlines()
     if not lines or lines[0].strip() != _FENCE:
         raise EntryError("file must start with a '---' frontmatter block")
@@ -114,8 +125,12 @@ def parse_entry(path: Path | str) -> tuple[dict, str]:
     return data, body
 
 
-def _one_line(exc: BaseException) -> str:
-    return " ".join(str(exc).split())
+def one_line(value: object) -> str:
+    """Collapse an exception or message to a single line for a failure detail."""
+    return " ".join(str(value).split())
+
+
+_one_line = one_line
 
 
 # --- registry ----------------------------------------------------------------
@@ -218,6 +233,44 @@ def github_repo_from_url(url: object) -> tuple[str, str] | None:
     if not owner or not repo:
         return None
     return owner, repo
+
+
+# --- git ---------------------------------------------------------------------
+
+
+class GitError(RuntimeError):
+    """``git`` is missing, hung, or refused a command the caller cannot do without."""
+
+
+def run_git(root: Path | str, args: list[str], timeout: float = 30.0) -> subprocess.CompletedProcess:
+    """Run ``git -C root args`` and return the completed process.
+
+    A nonzero exit is returned, not raised, because some callers expect one
+    (``rev-parse --verify`` on a ref that may not exist). A missing ``git``
+    binary or a hang is a ``GitError``: nothing in the registry can be checked
+    without git, so there is no reason for the caller to continue.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise GitError("git not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"git {' '.join(args)} timed out after {timeout:g}s") from exc
+
+
+def git_output(root: Path | str, args: list[str], timeout: float = 30.0) -> str:
+    """Return stdout of ``git -C root args``, raising ``GitError`` on a nonzero exit."""
+    result = run_git(root, args, timeout=timeout)
+    if result.returncode != 0:
+        detail = _one_line(result.stderr) or f"exit status {result.returncode}"
+        raise GitError(f"git {' '.join(args)} failed: {detail}")
+    return result.stdout
 
 
 # --- reachability ------------------------------------------------------------

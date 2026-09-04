@@ -67,7 +67,7 @@ nobody will find.
 - `owner: ~` is legal only on an existing entry after its owner has released
   it. The schema check accepts `~` wherever it appears; the rule that a release
   must be performed by the previous owner is enforced by the push authorization
-  check (`--changed-only`), not by the schema.
+  check (`--changed-only`, below), not by the schema.
 - A released entry stays `status: active` and search shows it as unowned.
   Anyone may claim it.
 
@@ -100,10 +100,10 @@ file or `{}` means nobody has recorded adoption yet.
 | Rule | Why |
 |---|---|
 | Every key names an existing entry in `entries/`. | Adoption of a tool that does not appear in the archive is noise search would rank on (R-7). |
-| Every value is a list of non-empty strings. | Search counts adopters; a scalar or an empty login would make the count wrong. |
+| Every value is a list of non-empty strings, each login listed once (compared case-insensitively). | Search counts adopters; a scalar, an empty login, or a repeated one would make the count wrong. |
 
-Push authorization (a later release of `validate.py`) restricts direct
-commits to adding or removing the actor's own login.
+Push authorization (`--changed-only`, below) restricts a direct commit to
+adding or removing the actor's own login.
 
 ## Validator output
 
@@ -119,5 +119,29 @@ jocasta.yaml: <config|schema-version>: <detail>
 
 Rule names: `frontmatter`, `unknown-key`, `name`, `owner`, `source`, `kind`,
 `install`, `registered`, `status`, `deprecated`, `body`, `adoption`, `config`,
-`schema-version`. The skill shows these lines to the submitter verbatim when a
-write fails; it never bypasses them (P-4).
+`schema-version`, and `authorization` (below). The skill shows these lines to
+the submitter verbatim when a write fails; it never bypasses them (P-4).
+
+## Push authorization: `--changed-only REF --actor LOGIN`
+
+The schema rules say whether the registry is well formed. The `authorization`
+rule, run by the instance's `validate` workflow on every push to the default
+branch, says whether that push was the actor's to make directly (charter D-3,
+P-4). It diffs `REF...HEAD` inside `--root` and reads both sides from git.
+Logins are compared case-insensitively, as GitHub treats them.
+
+| Change | Allowed when |
+|---|---|
+| `entries/<name>.md` added | Its `owner` is the actor. |
+| `entries/<name>.md` modified | Its `owner` at `REF` was the actor. This is what makes transfer and release the previous owner's call, and what keeps a claim of an unowned (`~`) entry on the PR path. |
+| `entries/<name>.md` deleted | Never. Entries are deprecated, not deleted. |
+| `adoption.yaml` | Under every tool key, the only login that appears or disappears between `REF` and `HEAD` is the actor's own. Adding a key that holds only the actor's login is fine; so is removing one. |
+| anything else | Not the validator's concern; repository permissions govern those files. |
+
+A violation prints `<file>: authorization: <detail>; open a PR instead`. When
+`REF` is the all-zeros SHA of a first push or is not a commit in the checkout,
+every registry file is treated as added and the same rules apply. The check is
+skipped, with a printed notice, when the actor is `github-actions[bot]` or
+`HEAD` is a merge commit: both mean a pull request that review and the
+consensus action already gated. `references/adoption.md` describes what the
+workflow passes as `REF` and where the rule's reach ends.
