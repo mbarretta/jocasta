@@ -66,14 +66,11 @@ The check is skipped, with a printed notice, when the actor is
 or when ``--event`` is ``pull_request`` (the workflow's checkout is GitHub's
 synthetic merge commit of the PR, gated the same way). ``--event`` is
 ``github.event_name``, passed by the composite action. On every other event
-(``push``) HEAD is checked whether or not it is a merge commit, so a local
-``git merge --no-ff`` of someone else's entry, or a collaborator clicking
-Merge on their own PR, turns the run red for the person who pushed it.
-
-Without ``--event`` the validator cannot tell a push from a pull_request
-checkout and falls back to skipping any HEAD with two parents. That is a shape
-test a local merge passes; it exists so callers that predate the flag keep
-working, and every composite action release that knows the flag passes it.
+(``push``), and when ``--event`` is not given at all, HEAD is checked whether
+or not it is a merge commit, so a local ``git merge --no-ff`` of someone
+else's entry, or a collaborator clicking Merge on their own PR, turns the run
+red for the person who pushed it. Counting HEAD's parents is never a skip:
+that is a shape test a local merge passes.
 
 Only the standard library and PyYAML are used, so the script runs under a
 plain ``python3`` with ``pip install pyyaml`` as well as under ``uv run``.
@@ -322,9 +319,9 @@ def check_authorization(
 
     ``event`` is the GitHub event name behind the checkout. ``pull_request``
     is skipped (the checkout is GitHub's synthetic merge, gated by the PR
-    path); any other event is checked even when HEAD is a merge commit. When
-    ``event`` is ``None`` the caller did not say, and a two-parent HEAD is
-    skipped as it was before the flag existed (see the module docstring).
+    path); any other event, and ``None`` (the caller did not say), is checked
+    even when HEAD is a merge commit. The only other skip is the instance's
+    own workflow actor.
 
     Failures use the same one-line format as the schema rules, under the rule
     name ``authorization``. Notices are informational lines for the log: what
@@ -336,14 +333,6 @@ def check_authorization(
         return [], [f"{AUTHORIZATION_RULE}: skipped; {actor} is the instance's own workflow and the PR path already gated this push"]
     if event == PULL_REQUEST_EVENT:
         return [], [f"{AUTHORIZATION_RULE}: skipped; a {event} event checks out GitHub's synthetic merge commit and the PR path gates it"]
-
-    if event is None:
-        head, *parents = jc.git_output(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).split()
-        if len(parents) > 1:
-            return [], [
-                f"{AUTHORIZATION_RULE}: skipped; HEAD {head[:12]} is a merge commit and no --event says whether it was pushed"
-                " (pass --event to check merge commits on push events)"
-            ]
 
     notices: list[str] = []
     base, changes = _changed_registry_files(root, ref, notices)
@@ -523,8 +512,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--event",
         metavar="NAME",
         help=(
-            "GitHub event behind the checkout (github.event_name): pull_request skips the authorization check, "
-            "any other event checks HEAD even when it is a merge commit; without it merge commits are skipped (needs --changed-only)"
+            "GitHub event behind the checkout (github.event_name): pull_request skips the authorization check; "
+            "any other event, or no --event at all, checks HEAD even when it is a merge commit (needs --changed-only)"
         ),
     )
     return parser

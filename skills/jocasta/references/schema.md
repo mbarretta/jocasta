@@ -144,9 +144,9 @@ every registry file is treated as added and the same rules apply. The check is
 skipped, with a printed notice, when the actor is `github-actions[bot]` (a
 consensus merge) or `NAME` is `pull_request` (the checkout is GitHub's
 synthetic merge of the PR); both are the pull request path, which review and
-the consensus action already gated. On a `push` event `HEAD` is checked even
-when it is a merge commit. Without `--event` the check falls back to skipping
-any two-parent `HEAD`, for callers that predate the flag. The workflow runs
+the consensus action already gated. On a `push` event, and when `--event` is
+not given at all, `HEAD` is checked even when it is a merge commit; counting
+its parents is never a skip. The workflow runs
 after the push has landed; `references/adoption.md` describes what the workflow
 passes as `REF` and `NAME`, where the rule's reach ends, and the branch
 protection that backstops it.

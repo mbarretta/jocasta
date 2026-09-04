@@ -507,13 +507,14 @@ def test_workflow_actor_is_skipped_with_a_notice(registry):
     assert len(notices) == 1 and "skipped" in notices[0] and "github-actions[bot]" in notices[0]
 
 
-def test_merge_commit_is_skipped_with_a_notice(registry):
-    # Without --event the validator cannot tell a push from a pull_request
-    # checkout, so it keeps the behaviour from before the flag existed.
+def test_merge_commit_without_event_is_checked(registry):
+    # sec1: counting HEAD's parents is not a skip. A caller that does not say
+    # which event it is on is checked like a push; only --event pull_request
+    # and the workflow actor are skipped.
     before = merge_foreign_edit_on_main(registry)
     failures, notices = registry.authorize(before, "alice")
-    assert failures == []
-    assert len(notices) == 1 and "skipped" in notices[0] and "merge commit" in notices[0]
+    assert_authorization_lines(failures, "entries/bob-tool.md")
+    assert notices == ["authorization: 1 changed registry file(s) checked for alice"]
 
 
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
@@ -608,14 +609,16 @@ def test_cli_push_event_merge_commit_exits_1_and_prints_the_line(registry):
     assert not lines[-1].startswith("ok:")
 
 
-def test_cli_without_event_keeps_the_merge_commit_skip(registry):
-    # The composite action at an older tag does not pass --event; its behaviour is unchanged.
+def test_cli_without_event_checks_the_merge_commit(registry):
+    # --event stays optional, but leaving it out never widens the skip: a
+    # two-parent HEAD is checked exactly as it is on a push event.
     before = merge_foreign_edit_on_main(registry)
     result = run_cli("--root", str(registry.root), "--offline", "--changed-only", before, "--actor", "alice")
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     lines = result.stdout.strip().splitlines()
-    assert lines[0].startswith("authorization: skipped") and "merge commit" in lines[0]
-    assert lines[-1] == "ok: 3 entries validated"
+    assert lines[0].startswith("authorization: 1 changed")
+    assert lines[1].startswith("entries/bob-tool.md: authorization: ")
+    assert not lines[-1].startswith("ok:")
 
 
 def test_cli_event_needs_changed_only():
