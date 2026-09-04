@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Harness scratch: git worktrees created per task. Plans under .claude/plans/
+# are tracked on purpose; the lockfile (uv.lock) is tracked on purpose.
+.claude/worktrees/
+
+# OS
+.DS_Store
