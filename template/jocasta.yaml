@@ -1,0 +1,6 @@
+# Registry configuration. `init` replaces PLACEHOLDER_TEAM with your team's
+# name; the other two keys are set by the machinery and change only when you
+# move this instance to a newer release of mbarretta/jocasta.
+schema_version: 1
+team: PLACEHOLDER_TEAM
+machinery_ref: v1

@@ -1,0 +1,57 @@
+# Composite action called by a registry instance's stale-sweep.yml. Fetches
+# this repo at the ref the instance pinned (`@v1`), then runs
+# scripts/stale_sweep.py over the instance checkout the caller has made; the
+# script pushes proposal branches and opens pull requests from that checkout.
+name: jocasta stale-sweep
+description: Open deprecation pull requests for active entries whose source is no longer reachable.
+
+inputs:
+  repo:
+    description: Registry repository as OWNER/REPO.
+    required: false
+    default: ${{ github.repository }}
+  dry-run:
+    description: Set to "true" to report stale entries without pushing branches or opening pull requests.
+    required: false
+    default: "false"
+  token:
+    description: Exported as GH_TOKEN; needs contents and pull-requests write scope to open pull requests. Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the jocasta machinery at the pinned release
+      uses: actions/checkout@v7
+      with:
+        repository: mbarretta/jocasta
+        ref: ${{ github.action_ref }}
+        path: .jocasta-machinery
+        persist-credentials: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - name: Install the script's only dependency
+      shell: bash
+      run: python -m pip install pyyaml
+    - name: Give the sweep a commit identity
+      shell: bash
+      run: |
+        git -C "$GITHUB_WORKSPACE" config user.name "github-actions[bot]"
+        git -C "$GITHUB_WORKSPACE" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+    - name: Sweep for stale sources
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        JOCASTA_REPO: ${{ inputs.repo }}
+        JOCASTA_DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        extra=()
+        if [ "$JOCASTA_DRY_RUN" = "true" ]; then
+          extra+=(--dry-run)
+        fi
+        python "$GITHUB_WORKSPACE/.jocasta-machinery/scripts/stale_sweep.py" \
+          --root "$GITHUB_WORKSPACE" \
+          --repo "$JOCASTA_REPO" \
+          "${extra[@]}"

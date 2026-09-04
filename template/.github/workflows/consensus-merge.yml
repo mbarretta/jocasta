@@ -1,0 +1,23 @@
+# Merges a deprecation or ownership pull request once it has the votes: the
+# entry's owner approving, or two people who are not the owner. The counting is
+# done by the machinery's script, never here.
+name: consensus-merge
+
+on:
+  pull_request:
+    types: [opened, labeled, synchronize]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  consensus-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mbarretta/jocasta/.github/actions/consensus-merge@v1
+        with:
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.pull_request.number }}

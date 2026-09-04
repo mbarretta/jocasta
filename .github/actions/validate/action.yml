@@ -1,0 +1,45 @@
+# Composite action called by a registry instance's validate.yml. Fetches this
+# repo at the ref the instance pinned (`@v1`), then runs scripts/validate.py
+# over the instance checkout that the caller has already made.
+name: jocasta validate
+description: Validate a jocasta registry instance with the machinery's validator at the pinned release.
+
+inputs:
+  actor:
+    description: GitHub login whose push or pull request is being validated (`github.actor`).
+    required: true
+  base-ref:
+    description: Commit the changed-file set is computed against (`github.event.before` on push, the base SHA on pull_request).
+    required: true
+  token:
+    description: Exported as GH_TOKEN for source-reachability checks through `gh api`. Defaults to the workflow token; pass a personal access token if sources live in repositories the workflow token cannot read.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the jocasta machinery at the pinned release
+      uses: actions/checkout@v7
+      with:
+        repository: mbarretta/jocasta
+        ref: ${{ github.action_ref }}
+        path: .jocasta-machinery
+        persist-credentials: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - name: Install the validator's only dependency
+      shell: bash
+      run: python -m pip install pyyaml
+    - name: Validate the registry
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        JOCASTA_BASE_REF: ${{ inputs.base-ref }}
+        JOCASTA_ACTOR: ${{ inputs.actor }}
+      run: |
+        python "$GITHUB_WORKSPACE/.jocasta-machinery/scripts/validate.py" \
+          --root "$GITHUB_WORKSPACE" \
+          --changed-only "$JOCASTA_BASE_REF" \
+          --actor "$JOCASTA_ACTOR"

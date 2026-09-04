@@ -1,0 +1,47 @@
+# Composite action called by a registry instance's consensus-merge.yml.
+# Fetches this repo at the ref the instance pinned (`@v1`), then lets
+# scripts/consensus_merge.py decide, through the GitHub API, whether the pull
+# request has the votes to merge.
+name: jocasta consensus-merge
+description: Merge a deprecation or ownership pull request once its owner approves or two non-owners agree.
+
+inputs:
+  repo:
+    description: Registry repository as OWNER/REPO.
+    required: false
+    default: ${{ github.repository }}
+  pr:
+    description: Pull request number to evaluate.
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  token:
+    description: Exported as GH_TOKEN; needs contents and pull-requests write scope to merge. Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the jocasta machinery at the pinned release
+      uses: actions/checkout@v7
+      with:
+        repository: mbarretta/jocasta
+        ref: ${{ github.action_ref }}
+        path: .jocasta-machinery
+        persist-credentials: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+    - name: Install the script's only dependency
+      shell: bash
+      run: python -m pip install pyyaml
+    - name: Evaluate the pull request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        JOCASTA_REPO: ${{ inputs.repo }}
+        JOCASTA_PR: ${{ inputs.pr }}
+      run: |
+        python "$GITHUB_WORKSPACE/.jocasta-machinery/scripts/consensus_merge.py" \
+          --repo "$JOCASTA_REPO" \
+          --pr "$JOCASTA_PR"
