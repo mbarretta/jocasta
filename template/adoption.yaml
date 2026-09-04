@@ -1,0 +1,4 @@
+# Who uses which tool: entry name -> list of GitHub logins. The jocasta skill
+# edits this file (`adopt` / `unadopt`); each person adds or removes only
+# their own login, and the validator enforces that on push.
+{}

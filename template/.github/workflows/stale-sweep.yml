@@ -1,0 +1,34 @@
+# Once a week, checks that every active entry's source is still reachable and
+# opens a pull request proposing deprecation for any that is not. Run it by
+# hand from the Actions tab to sweep now; tick dry-run to see what it would
+# open without opening anything.
+name: stale-sweep
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report stale entries without opening pull requests
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  stale-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      # The sweep reads entries from this checkout and pushes its proposal
+      # branches from it, so the checkout must keep its credentials.
+      - uses: actions/checkout@v7
+      - uses: mbarretta/jocasta/.github/actions/stale-sweep@v1
+        with:
+          repo: ${{ github.repository }}
+          dry-run: ${{ inputs.dry-run || 'false' }}
+          # Same secret as validate.yml: needed to reach sources in private
+          # repositories; the workflow token is used when it is absent.
+          token: ${{ secrets.JOCASTA_TOKEN || github.token }}
