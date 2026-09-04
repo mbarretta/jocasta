@@ -1,0 +1,26 @@
+{
+  "name": "jocasta",
+  "description": "The archive of a team's tools, kept in a GitHub repo and searched through a Claude Code skill. Describe a need in prose and learn what already answers to it, who owns it, and whether it is still alive; register a tool in one guided pass with an overlap check before anything is written; retire tools by owner call, two-non-owner consensus, or stale-source sweep. Each team runs its own registry repo from the bundled template; validation, permissions, and merges are decided by scripts and GitHub Actions, not by the model. Speaks as Jocasta Nu, archivist: a tool that is not recorded does not appear in the archive.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Michael Barretta",
+    "url": "https://github.com/mbarretta"
+  },
+  "homepage": "https://github.com/mbarretta/jocasta",
+  "repository": "https://github.com/mbarretta/jocasta",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "registry",
+    "tool-registry",
+    "discovery",
+    "search-before-build",
+    "github",
+    "git",
+    "ownership",
+    "deprecation",
+    "adoption",
+    "template",
+    "team-tools"
+  ]
+}
