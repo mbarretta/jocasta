@@ -4,12 +4,14 @@
 and its thin workflows call the composite actions under ``.github/actions/``
 at a pinned tag. Nothing here is executable locally, so these tests pin the
 shape the plan fixes instead: the file set, the single placeholder, the
-triggers and permissions of each workflow, and the CLI contract each action
-invokes. A parse failure or a drifted flag here is a broken instance in the
-field, where nobody runs pytest.
+triggers and permissions of each workflow, the CLI contract each action
+invokes, and the commit-SHA pins on every third-party action. A parse failure
+or a drifted flag here is a broken instance in the field, where nobody runs
+pytest.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -23,6 +25,14 @@ ACTIONS = MACHINERY_GITHUB / "actions"
 
 MACHINERY = "mbarretta/jocasta"
 PINNED_REF = "v1"
+
+# Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment
+# naming the release, never to a moving tag: the composite actions run with
+# write tokens in every instance (audit finding sec5). yaml.safe_load drops
+# the comment, so the pin shape is checked on the raw text.
+USES_LINE = re.compile(r"^\s*-?\s*uses:\s*(?P<target>\S+)(?P<trailer>.*)$", re.MULTILINE)
+SHA_PIN = re.compile(r"[^@\s]+@[0-9a-f]{40}")
+VERSION_COMMENT = re.compile(r" # v\d+\.\d+\.\d+")
 
 # Assembled from parts, as tests/test_validate.py does at its N-6 guard, so
 # this file does not itself contain the org name and the case-insensitive
@@ -78,6 +88,24 @@ def text_under(*roots: Path) -> dict:
         for p in sorted(root.rglob("*"))
         if p.is_file()
     }
+
+
+def third_party_uses() -> list:
+    """Every ``uses:`` line that does not call the machinery itself, as
+    ``(file, target, trailing text)``; the machinery is pinned to a release
+    tag on purpose so instances pick up patch releases."""
+    return [
+        (rel(path), m["target"], m["trailer"])
+        for path in EXPECTED_YAML
+        for m in USES_LINE.finditer(path.read_text())
+        if not m["target"].startswith(f"{MACHINERY}/")
+    ]
+
+
+def locked_version(package: str) -> str:
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    (found,) = [p for p in lock["package"] if p["name"] == package]
+    return found["version"]
 
 
 # --- file set and parseability -------------------------------------------
@@ -205,7 +233,8 @@ def test_each_action_bootstraps_the_machinery_the_same_way(name):
     python = uses_step(action, "actions/setup-python@")
     assert str(python["with"]["python-version"]) == "3.12"
 
-    assert "pip install pyyaml" in run_text(action)
+    # The only dependency is pinned to the version uv.lock tests against.
+    assert f'python -m pip install "pyyaml=={locked_version("pyyaml")}"' in run_text(action)
 
     assert action["inputs"]["token"]["default"] == "${{ github.token }}"
     script_steps = [s for s in steps(action) if "scripts/" in s.get("run", "")]
@@ -251,6 +280,28 @@ def test_action_inputs_never_reach_a_shell_unescaped():
     for name in ("validate", "consensus-merge", "stale-sweep"):
         text = run_text(load(ACTIONS / name / "action.yml"))
         assert "${{ inputs." not in text, name
+
+
+# --- third-party action pins (audit finding sec5) -----------------------
+
+
+def test_every_third_party_action_is_pinned_to_a_commit_sha_with_a_version_comment():
+    found = third_party_uses()
+    assert {t.split("@")[0] for _, t, _ in found} >= {"actions/checkout", "actions/setup-python"}
+    for path, target, trailer in found:
+        assert SHA_PIN.fullmatch(target), f"{path}: {target} is not pinned to a 40-hex commit SHA"
+        assert VERSION_COMMENT.fullmatch(trailer), f"{path}: {target} lacks a trailing # vX.Y.Z comment"
+
+
+def test_each_third_party_action_is_pinned_identically_everywhere():
+    # One SHA and one release per action across the actions, the template
+    # workflows, and ci.yml, so a bump cannot leave a file behind.
+    pins = {}
+    for _, target, trailer in third_party_uses():
+        action, _, sha = target.partition("@")
+        pins.setdefault(action, set()).add((sha, trailer.strip()))
+    for action, seen in pins.items():
+        assert len(seen) == 1, f"{action} is pinned inconsistently: {sorted(seen)}"
 
 
 # --- machinery CI --------------------------------------------------------
