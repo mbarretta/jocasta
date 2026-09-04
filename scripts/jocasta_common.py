@@ -2,7 +2,7 @@
 
 Everything here depends on the Python 3.11+ standard library plus PyYAML, so
 it runs the same under ``uv run`` locally and under ``pip install pyyaml`` in
-a GitHub Actions job. The three public building blocks:
+a GitHub Actions job. The public building blocks:
 
 - ``parse_entry(path)``: split an ``entries/<name>.md`` file into its YAML
   frontmatter and prose body, raising ``EntryError`` on anything malformed.
@@ -14,10 +14,15 @@ a GitHub Actions job. The three public building blocks:
   see) and an HTTP request for anything else.
 - ``run_git(root, args)`` / ``git_output(root, args)``: run ``git`` inside a
   registry checkout, for the diff-scoped checks that compare two commits.
+- ``gh(args)`` / ``gh_ok(args)``: run the GitHub CLI, turning a missing or hung
+  binary (and, for ``gh_ok``, a nonzero exit) into ``GhError`` so the scripts
+  that open and merge pull requests report one failure line instead of a
+  traceback. ``repo_arg`` is the argparse type for their ``--repo OWNER/REPO``.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import re
 import subprocess
@@ -290,6 +295,45 @@ def run_gh(args: list[str], timeout: float) -> subprocess.CompletedProcess:
         timeout=timeout,
         check=False,
     )
+
+
+GH_TIMEOUT = 30.0
+
+
+class GhError(RuntimeError):
+    """A ``gh`` invocation that could not be completed."""
+
+
+def gh(args: list[str], timeout: float = GH_TIMEOUT) -> subprocess.CompletedProcess:
+    """Run ``gh`` through ``run_gh`` (tests monkeypatch that).
+
+    A nonzero exit is returned, not raised, because some callers read the
+    error text (a 404 that means "absent", a label that already exists). A
+    missing ``gh`` or a hang is a ``GhError``.
+    """
+    try:
+        return run_gh(args, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise GhError("gh not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GhError(f"gh {' '.join(args[:2])} timed out after {timeout:g}s") from exc
+
+
+def gh_ok(args: list[str], timeout: float = GH_TIMEOUT) -> subprocess.CompletedProcess:
+    """Run ``gh`` and raise ``GhError`` unless it exited 0."""
+    result = gh(args, timeout=timeout)
+    if result.returncode != 0:
+        detail = one_line(result.stderr) or f"exit status {result.returncode}"
+        raise GhError(f"gh {' '.join(args[:2])} failed: {detail}")
+    return result
+
+
+def repo_arg(value: str) -> str:
+    """argparse type for ``--repo``: exactly ``OWNER/REPO``."""
+    owner, _, name = value.partition("/")
+    if not owner or not name or "/" in name:
+        raise argparse.ArgumentTypeError(f"expected OWNER/REPO, got {value!r}")
+    return value
 
 
 def is_reachable(url: object, timeout: float = 10.0) -> tuple[bool, str]:

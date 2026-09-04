@@ -40,15 +40,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import jocasta_common as jc
 
-GH_TIMEOUT = 30.0
 PAGE_SIZE = 100
 VOICES_REQUIRED = 2
 ENTRY_PATH_RE = re.compile(r"^entries/([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
@@ -65,10 +61,6 @@ LABEL_VERBS = {"deprecation": "deprecate", "ownership": "claim"}
 DEFAULT_VERB = "update"
 
 
-class GhError(RuntimeError):
-    """A ``gh`` invocation that could not be completed."""
-
-
 @dataclass
 class Decision:
     """What to do with the PR and why, from the review state alone."""
@@ -81,28 +73,13 @@ class Decision:
 
 # --- gh ----------------------------------------------------------------------
 
-
-def gh(args: list[str]) -> subprocess.CompletedProcess:
-    """Run ``gh`` through ``jocasta_common.run_gh`` (tests monkeypatch that)."""
-    try:
-        return jc.run_gh(args, timeout=GH_TIMEOUT)
-    except FileNotFoundError as exc:
-        raise GhError("gh not found") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise GhError(f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT:g}s") from exc
-
-
-def gh_ok(args: list[str]) -> subprocess.CompletedProcess:
-    """Run ``gh`` and raise ``GhError`` unless it exited 0."""
-    result = gh(args)
-    if result.returncode != 0:
-        detail = " ".join(result.stderr.split()) or f"exit status {result.returncode}"
-        raise GhError(f"gh {' '.join(args[:2])} failed: {detail}")
-    return result
+# ``gh`` and ``gh_ok`` live in jocasta_common (stale_sweep.py shares them);
+# ``GhError`` is re-exported so ``run`` can catch it by its local name.
+GhError = jc.GhError
 
 
 def gh_json(endpoint: str):
-    return json.loads(gh_ok(["api", endpoint]).stdout)
+    return json.loads(jc.gh_ok(["api", endpoint]).stdout)
 
 
 def gh_list(endpoint: str) -> list:
@@ -119,7 +96,7 @@ def gh_list(endpoint: str) -> list:
 
 def fetch_default_branch_entry(repo: str, path: str, ref: str) -> str | None:
     """Raw text of ``path`` at ``ref``, or ``None`` when it is not there."""
-    result = gh(["api", "-H", "Accept: application/vnd.github.raw+json", f"repos/{repo}/contents/{path}?ref={ref}"])
+    result = jc.gh(["api", "-H", "Accept: application/vnd.github.raw+json", f"repos/{repo}/contents/{path}?ref={ref}"])
     if result.returncode == 0:
         return result.stdout
     if "HTTP 404" in result.stderr:
@@ -139,7 +116,7 @@ def comment_once(repo: str, pr: int, kind: str, body: str) -> bool:
     existing = gh_list(f"repos/{repo}/issues/{pr}/comments")
     if any(marker in (c.get("body") or "") for c in existing):
         return False
-    gh_ok(["api", "--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={marker}\n{body}"])
+    jc.gh_ok(["api", "--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={marker}\n{body}"])
     return True
 
 
@@ -206,13 +183,7 @@ def owner_from_entry_text(text: str) -> str | None:
 
     Raises ``jocasta_common.EntryError`` when the text is not an entry.
     """
-    with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as handle:
-        handle.write(text)
-        tmp = Path(handle.name)
-    try:
-        frontmatter, _ = jc.parse_entry(tmp)
-    finally:
-        tmp.unlink(missing_ok=True)
+    frontmatter, _ = jc.parse_entry_text(text)
     owner = frontmatter.get("owner")
     return owner if isinstance(owner, str) and owner.strip() else None
 
@@ -270,7 +241,7 @@ def run(repo: str, pr_number: int) -> int:
         verb = next((LABEL_VERBS[label["name"]] for label in pr.get("labels", []) if label.get("name") in LABEL_VERBS), DEFAULT_VERB)
         subject = merge_subject(verb, name, decision.route)
         body = f"Merged by jocasta consensus-merge: {decision.reason}."
-        gh_ok(["pr", "merge", str(pr_number), "--repo", repo, "--squash", "--subject", subject, "--body", body])
+        jc.gh_ok(["pr", "merge", str(pr_number), "--repo", repo, "--squash", "--subject", subject, "--body", body])
         print(f"{tag}: merged (route: {decision.route}; {decision.reason})")
         return 0
     except GhError as exc:
@@ -281,16 +252,9 @@ def run(repo: str, pr_number: int) -> int:
 # --- CLI ---------------------------------------------------------------------
 
 
-def _repo_arg(value: str) -> str:
-    owner, _, name = value.partition("/")
-    if not owner or not name or "/" in name:
-        raise argparse.ArgumentTypeError(f"expected OWNER/REPO, got {value!r}")
-    return value
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Merge a jocasta deprecation or ownership PR once it has the votes.")
-    parser.add_argument("--repo", required=True, type=_repo_arg, help="registry repository as OWNER/REPO")
+    parser.add_argument("--repo", required=True, type=jc.repo_arg, help="registry repository as OWNER/REPO")
     parser.add_argument("--pr", required=True, type=int, help="pull request number")
     args = parser.parse_args(argv)
     return run(args.repo, args.pr)
