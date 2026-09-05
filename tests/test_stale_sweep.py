@@ -537,6 +537,12 @@ def test_deprecate_text_refuses_when_no_single_active_status_line():
 # --- pure pieces -------------------------------------------------------------
 
 
+def test_route_is_one_the_schema_and_the_consensus_gate_accept():
+    """The sweep's PRs carry the third R-5 route; it must be a route validate.py and consensus_merge.py both know."""
+    assert ss.ROUTE == "stale-source"
+    assert ss.ROUTE in jc.ROUTES
+
+
 def test_probe_retries_only_after_a_failure():
     probe = FakeReachability({"https://example.com/a": [UP], "https://example.com/b": [DOWN, DOWN], "https://example.com/c": [DOWN, UP]})
     sleeps: list[float] = []

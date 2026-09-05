@@ -23,9 +23,9 @@ Rules, in the order they are applied (charter R-5, D-3, P-4, P-5):
    (both sides are parsed, not diffed as text):
 
    - a **deprecation**: ``status`` goes ``active`` -> ``deprecated`` and a
-     ``deprecated`` block appears whose ``route`` is ``owner`` or
-     ``consensus``; every other field is unchanged and the body is unchanged
-     or only appended to;
+     ``deprecated`` block appears whose ``route`` is ``owner``, ``consensus``,
+     or ``stale-source`` (the sweep's PRs carry the last); every other field
+     is unchanged and the body is unchanged or only appended to;
    - a **claim**: ``owner`` becomes the PR author's login and nothing else
      changes.
 
@@ -79,8 +79,12 @@ VOICE_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # say nothing about approval, so they must not overwrite a veto or an approval.
 COUNTED_REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 
-# ``deprecated.route`` values a PR may carry; ``stale-source`` is the sweep's.
-PR_DEPRECATION_ROUTES = frozenset({"owner", "consensus"})
+# ``deprecated.route`` values a PR may carry: every route the schema knows. A
+# person's PR writes ``owner`` or ``consensus``; the stale sweep's PRs write
+# ``stale-source`` and are merged by this script like any other deprecation.
+PR_DEPRECATION_ROUTES = frozenset(jc.ROUTES)
+# The same routes as the scope-refusal comment lists them: "`a`, `b`, or `c`".
+_ROUTE_LIST = ", ".join(f"`{route}`" for route in jc.ROUTES[:-1]) + f", or `{jc.ROUTES[-1]}`"
 
 # Stands in for a frontmatter key one side of a PR lacks, so "absent" and
 # "present with the value None" (``owner: ~``) compare as different.
@@ -138,8 +142,7 @@ def fetch_entry_text(repo: str, path: str, ref: str) -> str | None:
         return result.stdout
     if "HTTP 404" in result.stderr:
         return None
-    detail = " ".join(result.stderr.split()) or f"exit status {result.returncode}"
-    raise GhError(f"gh api repos/{repo}/contents/{path} failed: {detail}")
+    raise GhError(f"gh api repos/{repo}/contents/{path} failed: {jc.failure_detail(result)}")
 
 
 def comment_once(repo: str, pr: int, kind: str, body: str) -> bool:
@@ -212,7 +215,7 @@ def decide(*, owner: str | None, author: str, author_association: str | None, la
     if owner is not None:
         owner_state = next((state for login, state in latest_reviews.items() if jc.same_login(login, owner)), None)
         if owner_state == "APPROVED":
-            return Decision("merge", route="owner", voices=[owner], reason=f"owner {owner} approved")
+            return Decision("merge", route=jc.ROUTE_OWNER, voices=[owner], reason=f"owner {owner} approved")
         if owner_state == "CHANGES_REQUESTED":
             return Decision("blocked", reason=f"owner {owner} requested changes")
 
@@ -224,7 +227,7 @@ def decide(*, owner: str | None, author: str, author_association: str | None, la
             voices.append(login)
 
     if len(voices) >= VOICES_REQUIRED:
-        return Decision("merge", route="consensus", voices=voices, reason=f"{len(voices)} non-owner voices: {', '.join(voices)}")
+        return Decision("merge", route=jc.ROUTE_CONSENSUS, voices=voices, reason=f"{len(voices)} non-owner voices: {', '.join(voices)}")
     return Decision(
         "wait",
         voices=voices,
@@ -238,8 +241,7 @@ def owner_from_entry_text(text: str) -> str | None:
     Raises ``jocasta_common.EntryError`` when the text is not an entry.
     """
     frontmatter, _ = jc.parse_entry_text(text)
-    owner = frontmatter.get("owner")
-    return owner if isinstance(owner, str) and owner.strip() else None
+    return jc.entry_owner(frontmatter)
 
 
 def change_in_scope(*, base_text: str | None, head_text: str | None, author: str) -> tuple[str | None, str]:
@@ -273,7 +275,7 @@ def change_in_scope(*, base_text: str | None, head_text: str | None, author: str
         return None, "it changes nothing in the entry"
     return None, (
         f"it changes {', '.join(what)}; a consensus PR may only set `status: deprecated` with a `deprecated` block "
-        f"(route `owner` or `consensus`) and append to the body, or set `owner` to its author (`{author}`) with nothing else changed"
+        f"(route {_ROUTE_LIST}) and append to the body, or set `owner` to its author (`{author}`) with nothing else changed"
     )
 
 
@@ -281,8 +283,8 @@ def _is_deprecation(base_fm: dict, head_fm: dict) -> bool:
     """``status`` went ``active`` -> ``deprecated`` and a well-routed block appeared where there was none."""
     block = head_fm.get("deprecated")
     return (
-        base_fm.get("status") == "active"
-        and head_fm.get("status") == "deprecated"
+        base_fm.get("status") == jc.STATUS_ACTIVE
+        and head_fm.get("status") == jc.STATUS_DEPRECATED
         and "deprecated" not in base_fm
         and isinstance(block, dict)
         and block.get("route") in PR_DEPRECATION_ROUTES

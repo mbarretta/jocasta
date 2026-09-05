@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import jocasta_common as jc
 import validate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -686,3 +687,12 @@ def test_machinery_and_fixtures_never_name_a_specific_org():
                 if needle in path.read_text(encoding="utf-8").lower():
                     offenders.append(str(path.relative_to(REPO_ROOT)))
     assert offenders == []
+
+
+# --- shared vocabulary -------------------------------------------------------
+
+
+def test_schema_vocabulary_is_the_shared_definition():
+    """validate.py keeps its module-level names, but jocasta_common is the one place the vocabulary is written."""
+    for name in ("KINDS", "STATUSES", "ROUTES", "KNOWN_KEYS", "DEPRECATED_KEYS"):
+        assert getattr(validate, name) is getattr(jc, name), name

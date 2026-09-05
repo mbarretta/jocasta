@@ -4,8 +4,15 @@ Everything here depends on the Python 3.11+ standard library plus PyYAML, so
 it runs the same under ``uv run`` locally and under ``pip install pyyaml`` in
 a GitHub Actions job. The public building blocks:
 
+- ``KNOWN_KEYS``, ``KINDS``, ``STATUSES``, ``ROUTES``, ``DEPRECATED_KEYS``: the
+  entry-schema vocabulary from ``skills/jocasta/references/schema.md``, written
+  once here so the validator, the consensus gate, and the stale sweep cannot
+  drift apart on which values exist.
 - ``parse_entry(path)``: split an ``entries/<name>.md`` file into its YAML
   frontmatter and prose body, raising ``EntryError`` on anything malformed.
+- ``entry_owner(frontmatter)``: the ``owner`` field as a login, or ``None`` for
+  ``~``, a blank, or a missing key; the one reading of the field every
+  authorization decision hinges on.
 - ``load_registry(root)``: read an instance directory (``jocasta.yaml``,
   ``adoption.yaml``, ``entries/*.md``) into a ``Registry`` without raising, so
   a validator can report every problem instead of stopping at the first.
@@ -21,6 +28,9 @@ a GitHub Actions job. The public building blocks:
 - ``same_login(a, b)``: compare two GitHub logins the way GitHub does, without
   regard to case, so an ``owner`` typed as ``Alice`` still matches the ``alice``
   the API reports.
+- ``one_line(value)`` / ``failure_detail(result)``: collapse an exception, or
+  a failed subprocess's stderr (falling back to its exit status), to the one
+  line a failure message quotes.
 """
 
 from __future__ import annotations
@@ -42,6 +52,21 @@ CONFIG_FILE = "jocasta.yaml"
 ADOPTION_FILE = "adoption.yaml"
 ENTRIES_DIR = "entries"
 ENTRIES_README = "README.md"
+
+# --- schema vocabulary (schema.md is the prose; this is the one code copy) ----
+
+KNOWN_KEYS = ("name", "owner", "source", "kind", "install", "registered", "status", "deprecated")
+KINDS = ("cli", "script", "skill")
+STATUS_ACTIVE = "active"
+STATUS_DEPRECATED = "deprecated"
+STATUSES = (STATUS_ACTIVE, STATUS_DEPRECATED)
+# The three deprecation routes (charter R-5): the owner's call, two non-owners'
+# consensus, and the stale sweep noticing a source that no longer answers.
+ROUTE_OWNER = "owner"
+ROUTE_CONSENSUS = "consensus"
+ROUTE_STALE_SOURCE = "stale-source"
+ROUTES = (ROUTE_OWNER, ROUTE_CONSENSUS, ROUTE_STALE_SOURCE)
+DEPRECATED_KEYS = ("route", "date", "note")
 
 _FENCE = "---"
 _KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -122,7 +147,7 @@ def parse_entry_text(text: str) -> tuple[dict, str]:
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        raise EntryError(f"frontmatter is not valid YAML: {_one_line(exc)}") from exc
+        raise EntryError(f"frontmatter is not valid YAML: {one_line(exc)}") from exc
 
     if data is None:
         raise EntryError("frontmatter is empty")
@@ -133,12 +158,26 @@ def parse_entry_text(text: str) -> tuple[dict, str]:
     return data, body
 
 
+def entry_owner(frontmatter: dict) -> str | None:
+    """The entry's ``owner`` as a login, or ``None`` when it has none.
+
+    ``owner: ~`` parses as ``None``, and a missing key, a blank string, or a
+    non-string value (all of which the validator reports) mean the same thing
+    to an authorization decision: nobody. The login is returned as typed;
+    compare it with ``same_login``.
+    """
+    owner = frontmatter.get("owner")
+    return owner if isinstance(owner, str) and owner.strip() else None
+
+
 def one_line(value: object) -> str:
     """Collapse an exception or message to a single line for a failure detail."""
     return " ".join(str(value).split())
 
 
-_one_line = one_line
+def failure_detail(result: subprocess.CompletedProcess) -> str:
+    """What a failed ``git``/``gh`` run said: its stderr on one line, else its exit status."""
+    return one_line(result.stderr) or f"exit status {result.returncode}"
 
 
 # --- registry ----------------------------------------------------------------
@@ -179,7 +218,7 @@ def _load_yaml_mapping(path: Path, problems: list[tuple[str, str]], *, required:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        problems.append((path.name, f"not valid YAML: {_one_line(exc)}"))
+        problems.append((path.name, f"not valid YAML: {one_line(exc)}"))
         return None
     if data is None:
         return {}
@@ -287,8 +326,7 @@ def git_output(root: Path | str, args: list[str], timeout: float = 30.0) -> str:
     """Return stdout of ``git -C root args``, raising ``GitError`` on a nonzero exit."""
     result = run_git(root, args, timeout=timeout)
     if result.returncode != 0:
-        detail = _one_line(result.stderr) or f"exit status {result.returncode}"
-        raise GitError(f"git {' '.join(args)} failed: {detail}")
+        raise GitError(f"git {' '.join(args)} failed: {failure_detail(result)}")
     return result.stdout
 
 
@@ -337,8 +375,7 @@ def gh_ok(args: list[str], timeout: float = GH_TIMEOUT) -> subprocess.CompletedP
     """Run ``gh`` and raise ``GhError`` unless it exited 0."""
     result = gh(args, timeout=timeout)
     if result.returncode != 0:
-        detail = one_line(result.stderr) or f"exit status {result.returncode}"
-        raise GhError(f"gh {' '.join(args[:2])} failed: {detail}")
+        raise GhError(f"gh {' '.join(args[:2])} failed: {failure_detail(result)}")
     return result
 
 
@@ -379,8 +416,7 @@ def _github_reachable(owner: str, repo: str, *, timeout: float) -> tuple[bool, s
         return False, f"gh api {endpoint} timed out after {timeout:g}s"
     if result.returncode == 0:
         return True, f"gh api {endpoint} succeeded"
-    detail = _one_line(result.stderr) or f"exit status {result.returncode}"
-    return False, f"gh api {endpoint} failed: {detail}"
+    return False, f"gh api {endpoint} failed: {failure_detail(result)}"
 
 
 def _http_reachable(url: str, *, timeout: float) -> tuple[bool, str]:
@@ -403,8 +439,8 @@ def _http_status(url: str, method: str, timeout: float) -> tuple[int | None, str
         reason = exc.reason
         if isinstance(reason, TimeoutError):
             return None, f"timed out after {timeout:g}s"
-        return None, f"connection failed: {_one_line(reason)}"
+        return None, f"connection failed: {one_line(reason)}"
     except TimeoutError:
         return None, f"timed out after {timeout:g}s"
     except (OSError, ValueError) as exc:
-        return None, f"request failed: {_one_line(exc)}"
+        return None, f"request failed: {one_line(exc)}"

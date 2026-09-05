@@ -88,14 +88,16 @@ import yaml
 
 import jocasta_common as jc
 
+# The vocabulary (which keys, kinds, statuses, and routes exist) is written
+# once in jocasta_common, where consensus_merge.py and stale_sweep.py read it
+# too; it is imported by name so ``validate.KINDS`` and friends stay available
+# to tests and to the schema.md references. Which of those keys are required
+# is this validator's rule alone.
+from jocasta_common import DEPRECATED_KEYS, KINDS, KNOWN_KEYS, ROUTES, STATUSES
+
 SCHEMA_VERSION = 1
 
-KNOWN_KEYS = ("name", "owner", "source", "kind", "install", "registered", "status", "deprecated")
 REQUIRED_KEYS = ("name", "owner", "source", "kind", "registered", "status")
-KINDS = ("cli", "script", "skill")
-STATUSES = ("active", "deprecated")
-ROUTES = ("owner", "consensus", "stale-source")
-DEPRECATED_KEYS = ("route", "date", "note")
 DEPRECATED_REQUIRED = ("route", "date")
 
 # GitHub's login rules: alphanumerics and single hyphens, no leading or
@@ -261,7 +263,7 @@ def _check_source(rel: str, source: object, *, offline: bool, reachability: Reac
 
 def _check_deprecated(rel: str, status: str, fm: dict) -> list[str]:
     block = fm.get("deprecated")
-    if status == "active":
+    if status == jc.STATUS_ACTIVE:
         if "deprecated" in fm:
             return [_line(rel, "deprecated", "block is present but status is active")]
         return []
@@ -411,15 +413,20 @@ def _authorize_entry(root: Path, base: str | None, status: str, path: str, actor
     return refuse(f"unsupported change type {status!r}")
 
 
-def _owner_at(root: Path, rev: str, path: str) -> tuple[object, str | None]:
-    """``(owner, None)`` from the entry's frontmatter at ``rev``, or ``(None, reason)``."""
+def _owner_at(root: Path, rev: str, path: str) -> tuple[str | None, str | None]:
+    """``(owner, None)`` from the entry's frontmatter at ``rev``, or ``(None, reason)``.
+
+    A present-but-empty owner (``~``) is ``(None, None)``: unowned, not
+    unreadable. A missing ``owner`` key is unreadable, because the caller
+    cannot tell a release from a file that never named anyone.
+    """
     try:
         frontmatter, _ = jc.parse_entry_text(_show(root, rev, path))
     except (jc.GitError, jc.EntryError) as exc:
         return None, str(exc)
     if "owner" not in frontmatter:
         return None, "frontmatter has no owner field"
-    return frontmatter["owner"], None
+    return jc.entry_owner(frontmatter), None
 
 
 def _authorize_adoption(root: Path, base: str | None, status: str, actor: str) -> list[str]:
