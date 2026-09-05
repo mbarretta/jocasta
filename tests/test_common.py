@@ -309,3 +309,55 @@ def test_is_reachable_rejects_non_http_urls(url):
     ok, reason = jc.is_reachable(url)
     assert ok is False
     assert "http" in reason.lower()
+
+
+# --- schema vocabulary, entry_owner, failure_detail --------------------------
+
+
+def test_schema_vocabulary_is_defined_once_here():
+    assert jc.KINDS == ("cli", "script", "skill")
+    assert jc.STATUSES == ("active", "deprecated") == (jc.STATUS_ACTIVE, jc.STATUS_DEPRECATED)
+    assert jc.ROUTES == ("owner", "consensus", "stale-source") == (jc.ROUTE_OWNER, jc.ROUTE_CONSENSUS, jc.ROUTE_STALE_SOURCE)
+    assert jc.KNOWN_KEYS == ("name", "owner", "source", "kind", "install", "registered", "status", "deprecated")
+    assert jc.DEPRECATED_KEYS == ("route", "date", "note")
+
+
+@pytest.mark.parametrize(
+    "frontmatter, expected",
+    [
+        ({"owner": "alice"}, "alice"),
+        ({"owner": "Alice-2"}, "Alice-2"),
+        ({"owner": None}, None),
+        ({}, None),
+        ({"owner": ""}, None),
+        ({"owner": "   "}, None),
+        ({"owner": 42}, None),
+        ({"owner": ["alice"]}, None),
+    ],
+)
+def test_entry_owner_is_a_non_blank_string_or_none(frontmatter, expected):
+    assert jc.entry_owner(frontmatter) == expected
+
+
+def test_failure_detail_prefers_collapsed_stderr():
+    result = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="gh: Not Found\n  (HTTP 404)\n")
+    assert jc.failure_detail(result) == "gh: Not Found (HTTP 404)"
+
+
+def test_failure_detail_falls_back_to_the_exit_status():
+    result = subprocess.CompletedProcess(["gh"], 3, stdout="", stderr="  \n")
+    assert jc.failure_detail(result) == "exit status 3"
+
+
+def test_one_line_has_no_private_alias():
+    assert not hasattr(jc, "_one_line")
+
+
+def test_scripts_share_the_owner_and_failure_detail_helpers():
+    """Every script reads an entry's owner and a subprocess failure through jocasta_common, not a private copy."""
+    scripts = Path(jc.__file__).resolve().parent
+    for name in ("consensus_merge.py", "stale_sweep.py", "validate.py"):
+        text = (scripts / name).read_text(encoding="utf-8")
+        assert "jc.entry_owner(" in text, f"{name} does not read the owner through jc.entry_owner"
+        assert "isinstance(owner, str) and owner.strip()" not in text, f"{name} re-implements entry_owner"
+        assert "exit status {" not in text, f"{name} re-inlines failure_detail"

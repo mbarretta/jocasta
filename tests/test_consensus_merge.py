@@ -8,6 +8,7 @@ PR, a second identical comment).
 
 from __future__ import annotations
 
+import datetime as dt
 import subprocess
 import urllib.parse
 from pathlib import Path
@@ -16,6 +17,7 @@ import pytest
 
 import consensus_merge as cm
 import jocasta_common as jc
+import stale_sweep as ss
 
 REPO = "example-org/registry"
 PR = 7
@@ -397,6 +399,32 @@ def test_deprecation_with_owner_route_and_no_note_merges(use_gh):
     assert len(gh.merges) == 1
 
 
+@pytest.mark.parametrize("route", jc.ROUTES)
+def test_deprecation_with_any_schema_route_merges(use_gh, route):
+    head = DEPRECATED_ENTRY.replace("route: consensus", f"route: {route}")
+    gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("carol", "APPROVED")], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+
+
+def test_pr_deprecation_routes_are_the_schema_routes():
+    assert cm.PR_DEPRECATION_ROUTES == frozenset(jc.ROUTES)
+
+
+def test_the_stale_sweep_proposal_is_an_in_scope_deprecation(use_gh):
+    """stale_sweep.py writes the PR head; this script must accept exactly that text (the third R-5 route)."""
+    reason = "gh api repos/example-org/example-cli failed: HTTP 404: Not Found"
+    head = ss.deprecate_text(OWNED_ENTRY, today=dt.date(2026, 9, 4), reason=reason)
+    assert cm.change_in_scope(base_text=OWNED_ENTRY, head_text=head, author="github-actions[bot]") == ("deprecation", "")
+
+    pr = _pr_json(author="github-actions[bot]", labels=("stale-source", "deprecation"), head_ref="jocasta/stale-example-cli", author_association="NONE")
+    gh = use_gh(FakeGh(pr, [_file()], [_review("bob", "APPROVED"), _review("carol", "APPROVED")], head_entry=head))
+    assert cm.run(REPO, PR) == 0
+    assert len(gh.merges) == 1
+    assert gh.merges[0][gh.merges[0].index("--subject") + 1] == "deprecate example-cli (route: consensus)"
+    assert gh.posted_comments == []
+
+
 def test_claim_of_owned_entry_by_the_author_merges(use_gh):
     pr = _pr_json(author="bob", labels=("ownership",), head_ref="jocasta/claim-example-cli-bob")
     gh = use_gh(FakeGh(pr, [_file()], [_review("carol", "APPROVED")], head_entry=_claimed(OWNED_ENTRY, "bob")))
@@ -422,14 +450,14 @@ def test_claim_may_spell_the_author_login_in_another_case(use_gh):
         (OWNED_ENTRY.replace("name: example-cli", "name: other-cli"), "`name`"),
         (OWNED_ENTRY.replace("Lists the files", "Runs arbitrary code and lists the files"), "the body"),
         (DEPRECATED_ENTRY.replace("Lists the files in a directory tree that changed since a given git ref.", "Something else entirely."), "the body"),
-        (DEPRECATED_ENTRY.replace("route: consensus", "route: stale-source"), "`deprecated`"),
+        (DEPRECATED_ENTRY.replace("route: consensus", "route: manual"), "`deprecated`"),
         (OWNED_ENTRY.replace("status: active", "status: deprecated"), "`status`"),
         (_claimed(OWNED_ENTRY, "carol"), "`owner`"),
         (_claimed(DEPRECATED_ENTRY, "bob"), "`owner`"),
         (OWNED_ENTRY, "nothing"),
         ("no frontmatter\n", "frontmatter"),
     ],
-    ids=["install-added-with-deprecation", "install-added", "source", "kind", "name", "body-rewritten", "body-rewritten-with-deprecation", "stale-source-route", "status-without-block", "claim-for-someone-else", "claim-plus-deprecation", "no-change", "unreadable-head"],
+    ids=["install-added-with-deprecation", "install-added", "source", "kind", "name", "body-rewritten", "body-rewritten-with-deprecation", "unknown-route", "status-without-block", "claim-for-someone-else", "claim-plus-deprecation", "no-change", "unreadable-head"],
 )
 def test_out_of_scope_change_is_refused_even_with_the_owner_approval(use_gh, head, fragment):
     gh = use_gh(FakeGh(_pr_json(author="bob"), [_file()], [_review("alice", "APPROVED"), _review("carol", "APPROVED")], head_entry=head))
@@ -816,6 +844,8 @@ def test_write_paths_reference_states_insider_voices_and_content_scope():
         assert f"`{association}`" in section, f"{association} is not named as a voice"
     assert "deprecation" in section and "claim" in section
     assert "`active`" in section and "`deprecated`" in section
+    for route in jc.ROUTES:
+        assert f"`{route}`" in section, f"route {route} is not named in the content-shape rule"
     assert "nothing else" in section
 
 
@@ -826,4 +856,7 @@ def test_ownership_reference_covers_every_mode_and_the_consensus_rules():
     assert "owner: ~" in text
     assert "unowned" in text
     assert "two" in text.lower() and "non-owner" in text.lower()
+    rules = text.split("## How the consensus action decides", 1)[1].split("\n## ", 1)[0]
+    for route in jc.ROUTES:
+        assert f"`{route}`" in rules, f"route {route} is not named in the consensus rules"
     assert "does not exist" not in text.lower()

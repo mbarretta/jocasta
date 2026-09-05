@@ -59,7 +59,7 @@ from pathlib import Path
 import jocasta_common as jc
 
 RETRY_PAUSE = 5.0
-ROUTE = "stale-source"
+ROUTE = jc.ROUTE_STALE_SOURCE
 BRANCH_PREFIX = "jocasta/stale-"
 PR_LIST_LIMIT = 500
 # Label -> description, created if absent (the template ships no labels and
@@ -69,7 +69,7 @@ LABELS = {
     "stale-source": "Opened by the stale sweep: the entry's source did not answer",
     "deprecation": "Proposes retiring an entry",
 }
-_STATUS_ACTIVE_RE = re.compile(r"""^status\s*:\s*['"]?active['"]?\s*$""")
+_STATUS_ACTIVE_RE = re.compile(rf"""^status\s*:\s*['"]?{re.escape(jc.STATUS_ACTIVE)}['"]?\s*$""")
 
 Reachability = Callable[[str], tuple[bool, str]]
 Sleep = Callable[[float], object]
@@ -137,7 +137,7 @@ def deprecated_lines(today: dt.date, reason: str) -> list[str]:
     # JSON's double-quoted string is a valid YAML scalar, so a reason holding
     # ": ", "#", or quotes cannot be misread when the entry is parsed back.
     return [
-        "status: deprecated",
+        f"status: {jc.STATUS_DEPRECATED}",
         "deprecated:",
         f"  route: {ROUTE}",
         f"  date: {today.isoformat()}",
@@ -199,21 +199,19 @@ def decide(entry: jc.Entry, *, probe_source: Callable[[str], Probe], open_prs: l
         return Decision(name, "skip", f"{name!r} is not a kebab-case entry name; the validator reports this", rel)
 
     status = fm.get("status")
-    if status == "deprecated":
+    if status == jc.STATUS_DEPRECATED:
         block = fm.get("deprecated") if isinstance(fm.get("deprecated"), dict) else {}
         route, date = block.get("route", "?"), block.get("date", "?")
         return Decision(name, "skip", f"already deprecated (route {route}, {date})", rel)
-    if status != "active":
+    if status != jc.STATUS_ACTIVE:
         return Decision(name, "skip", f"status {status!r} is not active or deprecated; the validator reports this", rel)
 
     source = fm.get("source")
     if not jc.is_http_url(source):
         return Decision(name, "skip", f"source {source!r} is not an http(s) URL; the validator reports this", rel)
 
-    owner = fm.get("owner")
-    owner = owner if isinstance(owner, str) and owner.strip() else None
     result = probe_source(source)
-    common = dict(rel=rel, attempts=result.attempts, owner=owner, source=source)
+    common = dict(rel=rel, attempts=result.attempts, owner=jc.entry_owner(fm), source=source)
     if not result.stale:
         return Decision(name, "reachable", result.detail, **common)
 
@@ -253,7 +251,7 @@ def ensure_label(repo: str, name: str, description: str) -> None:
     """Create ``name`` unless it already exists; any other failure is a ``GhError``."""
     result = jc.gh(["label", "create", name, "--repo", repo, "--description", description])
     if result.returncode != 0 and "already exists" not in result.stderr:
-        raise jc.GhError(f"gh label create {name} failed: {jc.one_line(result.stderr) or f'exit status {result.returncode}'}")
+        raise jc.GhError(f"gh label create {name} failed: {jc.failure_detail(result)}")
 
 
 @dataclass
