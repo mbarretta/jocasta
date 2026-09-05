@@ -15,7 +15,7 @@ uv run pytest -q
 Run it before every commit. It must exit 0 from a fresh clone. Runtime code
 depends on Python >= 3.11 and PyYAML only; pytest is a `dev` dependency group.
 The scripts must also run under plain `python3` with PyYAML installed, because
-the composite actions invoke them that way (`pip install pyyaml`, then
+the composite actions invoke them that way (`pip install "pyyaml==6.0.3"`, then
 `python scripts/<name>.py`).
 
 Machinery CI (`.github/workflows/ci.yml`) runs the suite and then
