@@ -1,33 +1,44 @@
 # End-to-end sandbox verification, v1
 
-Date: 2026-09-04. Machinery: `github.com/mbarretta/jocasta`, public, tag `v1`
-at `ecadd4d` (main at `48c8aa1`, same tree). Instance:
+Dates: first round 2026-09-04, retry 2026-09-06. Machinery:
+`github.com/mbarretta/jocasta`, public, tag `v1` at `ecadd4d` (main at
+`48c8aa1`, same tree; unchanged between the two rounds). Instance:
 `github.com/mbarretta/jocasta-sandbox`, private, created for this run.
 Account: `mbarretta`, the only GitHub account available.
 
 ## Result in one paragraph
 
-The skill's protocols and all three scripts behave as the design plan's
-"Verification" section says when driven by hand against a real private
-instance: `init` produces a repo with the three workflows, every direct-commit
-mode lands and passes the push-authorization rule locally, the overlap gate
-and search wording hold, both non-owner PR paths open correctly and
-`consensus_merge.py` refuses to merge them with one voice, `stale_sweep.py`
-opens a `route: stale-source` PR for a dead source and opens nothing once the
-source is fixed, and a hand edit adding someone else's login to
-`adoption.yaml` is caught by the own-login rule. **Every one of the instance's
-22 GitHub Actions runs failed before reaching a script**, all for one reason:
-the composite actions pass `${{ github.action_ref }}` to a nested
-`actions/checkout@v7`, and inside a nested action's `with:` block that
-expression resolves to the nested action's ref (`v7`), not the caller's
-(`v1`). The Actions-side outcomes the plan expected (green `validate`,
-`consensus-merge` running, the sweep opening a PR from the workflow, red
-`validate` on the foreign-login push) were therefore **not** observed; each
-was reproduced by running the same script locally with the same arguments the
-action would have passed. A sandbox probe confirms the standard workaround.
-Three discrepancies are recorded below and deferred rather than fixed here.
-The sandbox could not be deleted (token lacks `delete_repo`) and is left in
-place.
+Two rounds. In the **first round** the skill's protocols and all three
+scripts behaved as the design plan's "Verification" section says when driven
+by hand against the real private instance (`init`, the overlap gate, every
+direct-commit mode, the search wording, both non-owner PR paths,
+`consensus_merge.py` refusing with one voice, `stale_sweep.py` opening and
+then not opening a `route: stale-source` PR, the own-login rule on
+`adoption.yaml`), but **every one of the instance's 22 GitHub Actions runs
+failed before reaching a script**: the composite actions pass
+`${{ github.action_ref }}` to a nested `actions/checkout@v7`, and inside a
+nested action's `with:` block that expression resolves to the nested action's
+ref (`v7`), not the caller's (`v1`) — discrepancy D1. The **retry** could not
+fix D1 (that is a machinery change and a re-tag, outside this task), so it
+put a shim in the sandbox: copies of the three `v1` actions differing in
+exactly that one line, with the sandbox workflows pointed at them. Through
+the shim the unmodified `v1` scripts ran under Actions and the plan's
+GitHub-side outcomes were observed: `validate` green on every direct-commit
+write and red for the right reason on a dead source and on a foreign login in
+`adoption.yaml`; `consensus-merge` evaluating both open PRs and refusing to
+merge with one non-owner voice; the sweep, from a `workflow_dispatch`,
+finding the dead source and pushing its `route: stale-source` proposal
+branch, and opening nothing after the fix. One expected outcome did not
+happen and became a confirmed discrepancy: the sweep's `gh pr create` under
+the workflow token was refused because GitHub's "Allow GitHub Actions to
+create and approve pull requests" setting is off by default, so
+`init-connect.md`'s "the default `GITHUB_TOKEN` is enough" is not true as
+written (D3). Still not observed: the `@v1` remote action reference itself
+(D1 stays open and deferred), `validate` on an empty registry from Actions,
+a sweep PR opened by the workflow token, and anything needing a second
+account. Three discrepancies are recorded below and deferred rather than
+fixed here. The sandbox could not be deleted (token lacks `delete_repo`) and
+is left in place.
 
 ## How this was run
 
@@ -48,6 +59,13 @@ place.
   signing was changed.
 - Every commit, PR, and run URL is linked. The sandbox is private, so the
   links resolve only for its owner.
+- The retry (2026-09-06) used a fresh clone of the sandbox as the snapshot,
+  again under the scratch directory, and the same plugin root (`48c8aa1`,
+  whose tree is `v1`'s). Config discovery took SKILL.md's first branch (the
+  cwd was a registry checkout whose `origin` is
+  `mbarretta/jocasta-sandbox`), so no `~/.config/jocasta/config.yaml` was
+  written this time. Nothing in the machinery repository was changed by
+  either round; the only file this task writes is this report.
 
 ## Preconditions (ac1)
 
@@ -70,12 +88,15 @@ Machinery-side checks from the first Verification bullet, run in the worktree:
   and `source-unreachable` passes under `--offline` because that flag skips
   reachability by design (the suite tests it with a faked `gh`).
 
-## Steps
+## Steps, first round (2026-09-04)
 
 Legend for "Match": **yes** = observed exactly what the plan's Verification
 section expects; **script yes / action no** = the script produced the expected
 result when run locally, but the instance workflow that should have run it
-failed at the machinery checkout (discrepancy D1).
+failed at the machinery checkout (discrepancy D1). The "action no" cells are
+revisited in "Retry: the Actions side, through a sandbox shim" below, which
+records which of them were later observed under Actions and which still were
+not.
 
 | # | Step | Commit / artifact | Instance run | Match |
 |---|---|---|---|---|
@@ -172,8 +193,8 @@ checks, run locally" below.
 
 `references/search.md`. Every `entries/*.md` except `README.md` and
 `adoption.yaml` were read from the refreshed snapshot; fit judged on the
-bodies; ranked fit, adopters, status. Evaluated against the final snapshot
-(`a66cdba`), so `ripgrep` shows the adopter count after step 5 and after the
+bodies; ranked fit, adopters, status. Evaluated against the first round's
+final snapshot (`a66cdba`), so `ripgrep` shows the adopter count after step 5 and after the
 hand edit in step 14.
 
 Need: "find every place a function name is used across a large repo without
@@ -426,6 +447,173 @@ Local cleanup done: `~/.config/jocasta/config.yaml` (written by `init`,
 pointing at the sandbox) removed; no `~/.cache/jocasta` was created because
 the snapshot lived in the scratch directory.
 
+Retry, 2026-09-06: the same command was run again at the end of the retry and
+was refused with the same `HTTP 403` / `delete_repo` message. The sandbox
+stays in place; the two commands above still apply.
+
+## Retry: the Actions side, through a sandbox shim (2026-09-06)
+
+The first round's evaluator asked for the Actions-side outcomes to be
+observed rather than reproduced by hand. Fixing D1 means editing
+`.github/actions/{validate,consensus-merge,stale-sweep}/action.yml` and
+`tests/test_template.py` in the machinery and moving or re-cutting the `v1`
+tag, none of which this task may do (its only repository write is this
+report). What it may change is the sandbox, which it owns for the run. So the
+retry added a **shim** to the sandbox: byte-for-byte copies of the three `v1`
+composite actions under the sandbox's own `.github/actions/<name>/`, each
+differing from the machinery's file in exactly one line,
+`ref: ${{ github.action_ref }}` → `ref: v1` (the value the fixed expression
+yields when an instance calls the action at `@v1`; the shim hard-codes it
+rather than evaluating the expression for a local action), and the three template workflows pointed at those
+local copies (`uses: ./.github/actions/<name>`), with the original `uses:`
+line kept as a comment. Everything downstream of that line is the machinery's:
+every run below checks out `mbarretta/jocasta` at `v1` (`HEAD is now at
+ecadd4d` in each log), installs PyYAML, and runs the unmodified `v1` script
+with the arguments the template passes. The shim was verified against the
+worktree before it was pushed (three files identical apart from the one line;
+all YAML parses).
+
+Shim commits:
+[`e46792b`](https://github.com/mbarretta/jocasta-sandbox/commit/e46792bbb7623b86dc404ff3708b7433c308c607)
+(the copies and the three `uses:` lines) and
+[`f6d4bad`](https://github.com/mbarretta/jocasta-sandbox/commit/f6d4bad5d2b9c52ca2ef64d6692f75209153a817)
+(see accommodation 1 below).
+
+**What the shim shows, and what it does not.** It shows that with the ref
+line corrected the three actions reach their scripts, and that the scripts
+behave as the plan says under the workflow token and the template's events,
+permissions, and inputs. It does **not** exercise the
+`mbarretta/jocasta/.github/actions/<name>@v1` reference itself, which still
+fails exactly as in the first round; D1 is confirmed, not closed. Two
+accommodations were needed for the shim alone and are not findings about the
+machinery:
+
+1. A local action has to exist in the runner's workspace, so the sandbox's
+   `consensus-merge.yml` gained an `actions/checkout@v7` step
+   (`persist-credentials: false`) ahead of the local action. The template
+   correctly has no checkout there: the remote `@v1` action needs none, since
+   `consensus_merge.py` works through the API. The first two `labeled` runs
+   after `e46792b` failed on exactly this
+   ([34048648571](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048648571),
+   [34048650911](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048650911):
+   "Can't find 'action.yml' … Did you forget to run actions/checkout").
+2. `pull_request: labeled` runs use GitHub's cached test-merge commit of the
+   PR, and that cache lagged the base-branch push of `f6d4bad`: re-labelling
+   the two PRs twice more re-ran the pre-`f6d4bad` workflow and failed the
+   same way four more times
+   ([34048983990](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048983990),
+   [34048986869](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048986869),
+   [34049249812](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049249812),
+   [34049251875](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049251875);
+   `refs/pull/1/merge` still held the older file). One empty commit on each
+   PR branch (`synchronize`;
+   [`5d749f1`](https://github.com/mbarretta/jocasta-sandbox/commit/5d749f13803a2827a3109b7dbd832bae7bcc2bda),
+   [`b949fd4`](https://github.com/mbarretta/jocasta-sandbox/commit/b949fd40c8241ed9952cda938ec56ad29c8e0a3c))
+   refreshed the merge commit and the runs went green. Each PR still changes
+   exactly one file. With the real remote action the workflow file never
+   changes on the base branch mid-PR, so this would not arise.
+
+Every write in the retry followed its reference's order: file written,
+validator run online over the snapshot and green, the one path staged,
+commit, push, then the instance's `validate` run watched. One departure from
+the letter of the references, stated for the record: `git pull --ff-only`
+was run once, before the first write (`register jq`); the later writes went
+out from a snapshot that was the instance's tip only because this session
+had just pushed it and nothing else writes to the sandbox, not because the
+per-mode refresh was repeated. That also closes the first round's process note about steps
+6–8: `register`, `adopt`, `deprecate` as owner, and `release` were each
+exercised again with the validator before the commit, and each push's run is
+linked below.
+
+### The plan's GitHub-side expectations, observed
+
+| Plan expectation | Sandbox write | Run | Observed | Verdict |
+|---|---|---|---|---|
+| `validate.yml` passes | shim push [`e46792b`](https://github.com/mbarretta/jocasta-sandbox/commit/e46792bbb7623b86dc404ff3708b7433c308c607) (no registry file changed) | [validate 34048149577](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048149577) success | `authorization: 0 changed registry file(s) checked for mbarretta` / `ok: 3 entries validated` | green on a push, **yes**; "on the empty registry", **not re-observable** (the instance is no longer empty and `init` was not re-run; first round's push `129d59f` failed at the checkout) |
+| `register` lands as a direct commit; CI green | `register jq` [`31d8fee`](https://github.com/mbarretta/jocasta-sandbox/commit/31d8fee71b31f4a81346be6acb0d52c867ed3c60) | [validate 34048626104](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048626104) success | `authorization: 1 changed registry file(s) checked for mbarretta` / `ok: 4 entries validated` | **yes** |
+| `adopt`; CI green; `search` shows the adopter count | `adopt jq` [`b62cd53`](https://github.com/mbarretta/jocasta-sandbox/commit/b62cd5332bf2111e9a6817b08adf459b1de8ad04) | [validate 34049327272](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049327272) success | 1 file checked; ok. `search` afterwards: `jq … adopters: 1` | **yes** |
+| consensus PR path: the action runs and refuses with one non-owner voice | PR #1, PR #2 re-triggered (accommodation 2) | consensus-merge [34049447938](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049447938) (#1), [34049457370](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049457370) (#2), both success | `pr #1: waiting: 1 of 2 non-owner voices (mbarretta)`; `pr #2: waiting: 1 of 2 non-owner voices (mbarretta)`; exit 0; no merge, no comment, no close; both PRs still open | **yes** — the AC's floor |
+| `validate` on a pull request | same two PRs | validate [34049447809](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049447809), [34049457340](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049457340), both success | `authorization: skipped; HEAD b416aff45aaf is a merge commit and the PR path already gated it` / `ok: 4 entries validated` (the `v1` validator's two-parent skip, as `adoption.md` documents) | yes (not a plan bullet; recorded for completeness) |
+| `deprecate` as owner → direct commit; entry still in `search`, marked | `deprecate jq` [`b8bc178`](https://github.com/mbarretta/jocasta-sandbox/commit/b8bc17803b748617991a9ba03edc18a74c3317d6) (`route: owner`, `date: 2026-09-06`, note, body untouched) | [validate 34050089367](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050089367) success | 1 file checked; ok. `search` lists `jq` as `deprecated — retired by its owner on 2026-09-06` | **yes** |
+| `release` → direct commit; entry active and unowned | `release fd` [`81a58f6`](https://github.com/mbarretta/jocasta-sandbox/commit/81a58f6d2f4c3c1c9b88074e3df0bc3cd69ad2b1) | [validate 34050149068](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050149068) success | 1 file checked; ok. `show fd`: `owner: ~`, `status: active` | **yes** (`claim` from another account: one-account limit, unchanged) |
+| break a `source` URL → `validate` red | hand edit [`4d6ba51`](https://github.com/mbarretta/jocasta-sandbox/commit/4d6ba51ea42d5a51ee764f20aeef74e54bce04b1) (the local validator refused it first, as in the first round) | [validate 34049695634](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049695634) **failure** | `entries/fd.md: source: unreachable (gh api repos/sharkdp/fd-e2e-source-gone-0000 failed: gh: Not Found (HTTP 404)): …`; exit 1 | **yes** — red for the rule, not the checkout |
+| `stale-sweep.yml` via dispatch → PR opened with `route: stale-source` | `gh workflow run stale-sweep.yml -f dry-run=false` | [stale-sweep 34049705584](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049705584) **failure** | `fd: stale (unreachable twice: …); could not open a proposal: gh pr create failed: pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)` / `jq: reachable` / `ripgrep: reachable` / `the-silver-searcher: skipped; already deprecated (route owner, 2026-09-04)` / `sweep: 3 active entries checked, 1 stale, 0 PRs opened, 1 skipped, 1 failed`; exit 1. Before the refusal the sweep had force-pushed its branch `jocasta/stale-fd` as `github-actions[bot]`: [`cdac4e5`](https://github.com/mbarretta/jocasta-sandbox/commit/cdac4e516c890f9b736e4c29e5de12030caaae59) `deprecate fd (stale source)`, whose diff is exactly the `status: deprecated` + `deprecated: {route: stale-source, date: 2026-09-06, note: …}` change the plan expects | **partial**: sweep runs from the dispatch and produces the proposal; the PR is refused by a repository setting → **D3 confirmed** |
+| (same, dry run) | `-f dry-run=true` | [stale-sweep 34049819315](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049819315) success | `fd: stale (…); dry run, would open PR 'deprecate fd (stale source)' from branch jocasta/stale-fd` / `sweep: 3 active entries checked, 1 stale, 1 PRs would be opened, 1 skipped` | yes |
+| fix the source; next sweep opens nothing | [`2b9348f`](https://github.com/mbarretta/jocasta-sandbox/commit/2b9348fc994768058cabdec576eafd6e7c4d056e) (validator green before the commit) | [validate 34049933776](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049933776) success; [stale-sweep 34049957928](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049957928) success | `fd: reachable` / `jq: reachable` / `ripgrep: reachable` / `the-silver-searcher: skipped …` / `sweep: 3 active entries checked, 0 stale, 0 PRs opened, 1 skipped` | **yes** (there was no PR to close first, since none was opened; the bot's branch was left as pushed) |
+| `adoption.yaml` + someone else's login → `validate.yml` fails with the own-login rule | hand edit [`1a9fb2b`](https://github.com/mbarretta/jocasta-sandbox/commit/1a9fb2bd445c36e4daec226d253144c472f6188d) (`jq: [mbarretta]` → `jq: [mbarretta, octocat]`) | [validate 34050270035](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050270035) **failure** | `authorization: 1 changed registry file(s) checked for mbarretta` / `adoption.yaml: authorization: octocat added under 'jq' by mbarretta, who may only add their own login; open a PR instead`; exit 1 | **yes** — the exact line `adoption.md` documents |
+| delete the sandbox | `gh repo delete mbarretta/jocasta-sandbox --yes` | — | `HTTP 403 … needs the "delete_repo" scope` | left in place (ac4) |
+
+The `register jq` interview, for the record: source
+`https://github.com/jqlang/jq` first (README read with `gh api
+repos/jqlang/jq/readme`), name `jq` from the repo name, kind `cli` (a single
+portable C binary), install `brew install jq`; `owner`, `registered`, `status`
+never asked. Overlap gate, reported before the write: "Nothing in the archive
+overlaps with `jq`. Continuing." (two text searchers and a file finder are a
+different need from a JSON processor). Closing statement:
+
+> Committed `entries/jq.md` to `main` of `mbarretta/jocasta-sandbox` (`31d8fee`), owner `mbarretta`, kind `cli`.
+
+`search` against the final snapshot (`1a9fb2b`) for "pull one field out of a
+command's JSON output from the shell" returns `jq` alone, marked
+`status: deprecated — retired by its owner on 2026-09-06: Retired by its
+owner at the end of the end-to-end run.`, `adopters: 2` (the second is the
+hand-edited `octocat`); the three other entries are read and discarded as a
+different need. The empty-result and `show` wording are as in step 4.
+
+### Still not observed after the retry
+
+- The `mbarretta/jocasta/.github/actions/<name>@v1` reference itself. D1 is
+  open; the shim substitutes the fixed line, it does not test the machinery's.
+- `validate` green on an **empty** registry from Actions. The first round's
+  only empty-registry push (`129d59f`) failed at the checkout, and the retry
+  did not re-run `init`; the local reproduction in "Authorization checks, run
+  locally" is the only evidence for that bullet.
+- A sweep PR opened by the workflow token, its `github-actions[bot]` author,
+  the GitHub rule that such a PR starts no `pull_request` workflows, and
+  closing it after a fix. All wait on the repository setting in D3. Turning
+  that setting on for the sandbox
+  (`gh api -X PUT repos/mbarretta/jocasta-sandbox/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true`,
+  or Settings → Actions → General → "Allow GitHub Actions to create and
+  approve pull requests") was refused by the permission layer this run
+  operated under and was not retried; with it on, the next
+  `workflow_dispatch` against a dead source is expected to open the PR from
+  branch `jocasta/stale-fd`.
+- Everything that needs a second or third GitHub account (unchanged from the
+  first round's "Known limits").
+
+### Retry runs (24; 13 success, 9 failure, 2 skipped)
+
+| Run | Workflow | Event | Ref | Result | Reached the script? |
+|---|---|---|---|---|---|
+| [34048149577](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048149577) | validate | push | main `e46792b` | success | yes |
+| [34048626104](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048626104) | validate | push | main `31d8fee` | success | yes |
+| [34048648571](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048648571) | consensus-merge | pull_request (labeled) | PR #1 | failure | no: shim accommodation 1 |
+| [34048650911](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048650911) | consensus-merge | pull_request (labeled) | PR #2 | failure | no: shim accommodation 1 |
+| [34048918196](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048918196) | validate | push | main `f6d4bad` | success | yes |
+| [34048983990](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048983990) | consensus-merge | pull_request (labeled) | PR #1 | failure | no: shim accommodation 2 |
+| [34048986869](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34048986869) | consensus-merge | pull_request (labeled) | PR #2 | failure | no: shim accommodation 2 |
+| [34049249812](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049249812) | consensus-merge | pull_request (labeled) | PR #1 | failure | no: shim accommodation 2 |
+| [34049251875](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049251875) | consensus-merge | pull_request (labeled) | PR #2 | failure | no: shim accommodation 2 |
+| [34049327272](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049327272) | validate | push | main `b62cd53` | success | yes |
+| [34049445909](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049445909) | validate | push | jocasta/claim-ripgrep-mbarretta | skipped | non-default branch, by design |
+| [34049447809](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049447809) | validate | pull_request (synchronize) | PR #1 | success | yes |
+| [34049447938](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049447938) | consensus-merge | pull_request (synchronize) | PR #1 | success | yes: `waiting: 1 of 2` |
+| [34049455403](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049455403) | validate | push | jocasta/deprecate-ripgrep-mbarretta | skipped | non-default branch, by design |
+| [34049457340](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049457340) | validate | pull_request (synchronize) | PR #2 | success | yes |
+| [34049457370](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049457370) | consensus-merge | pull_request (synchronize) | PR #2 | success | yes: `waiting: 1 of 2` |
+| [34049695634](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049695634) | validate | push | main `4d6ba51` | failure | yes: `source: unreachable` |
+| [34049705584](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049705584) | stale-sweep | workflow_dispatch | main `4d6ba51` | failure | yes: PR creation refused (D3) |
+| [34049819315](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049819315) | stale-sweep | workflow_dispatch (dry run) | main `4d6ba51` | success | yes |
+| [34049933776](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049933776) | validate | push | main `2b9348f` | success | yes |
+| [34049957928](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049957928) | stale-sweep | workflow_dispatch | main `2b9348f` | success | yes: `0 stale, 0 PRs opened` |
+| [34050089367](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050089367) | validate | push | main `b8bc178` | success | yes |
+| [34050149068](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050149068) | validate | push | main `81a58f6` | success | yes |
+| [34050270035](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34050270035) | validate | push | main `1a9fb2b` | failure | yes: own-login rule |
+
+Every run that reached a script did so through the shim's `ref: v1` checkout
+(`HEAD is now at ecadd4d` in the log), that is, with the machinery exactly as
+tagged.
+
 ## Authorization checks, run locally
 
 What `validate.py --root <clone> --changed-only <before> --actor mbarretta`
@@ -450,9 +638,10 @@ run on `main` was supposed to perform.
 (`740960b` and `e389c65`, the source break and fix, were run with the online
 schema validator instead: red with the `source` line, then ok.)
 
-## All Actions runs
+## All Actions runs, first round (27)
 
-27 runs. 22 failed, every one at the composite action's first step with
+The retry's 24 runs are tabulated in the retry section above; together the
+sandbox has 51. First round: 27 runs. 22 failed, every one at the composite action's first step with
 `ref: v7`; 4 were skipped by design (`validate` on a push to a non-default
 branch); 1 succeeded (the diagnostic probe).
 
@@ -542,11 +731,27 @@ three lines in each of the three action files, plus a test in
 `tests/test_template.py` (which currently pins the `ref: ${{ github.action_ref }}`
 expression) and a new tag or a moved `v1`, since instances pin `@v1`.
 
-**Consequence for this report:** every "action no" cell above. Nothing
-GitHub-side in the plan's Verification list was observed working: not
-`validate` green on the empty registry, not CI green on registrations, not
-the consensus action running, not the sweep's PR from a dispatch, not the red
-run on the foreign login. The scripts were verified by hand instead.
+**Consequence for the first round:** every "action no" cell in the first
+round's table. Nothing GitHub-side in the plan's Verification list was
+observed working then: not `validate` green on the empty registry, not CI
+green on registrations, not the consensus action running, not the sweep's PR
+from a dispatch, not the red run on the foreign login. The scripts were
+verified by hand instead.
+
+**Retry (2026-09-06):** the sandbox shim (copies of the three actions with
+only this line changed to `ref: v1`) reached the `v1` scripts in every run
+that got past the shim's own setup (16 of 16: 13 green and 3 red for a rule
+the script applied), and the plan's GitHub-side
+outcomes were then observed as listed in the retry section. That confirms the
+fix is this one line per file and nothing else in the actions. **Status:
+open, deferred.** The fix touches
+`.github/actions/{validate,consensus-merge,stale-sweep}/action.yml` (capture
+`github.action_ref` in a `run` step's `env` and read it back from `env` for
+the nested checkout, as the probe did), `tests/test_template.py:200` (which
+pins the current `ref: ${{ github.action_ref }}` expression and must pin the
+corrected one), and the `v1` tag (moved, or a new tag with instances
+re-pinned), and needs a push to `mbarretta/jocasta`; none of that is this
+task's to do.
 
 ### D2. `template/jocasta.yaml`'s comment carries the placeholder the protocol replaces
 
@@ -564,19 +769,48 @@ grep check. Either the comment should not name the marker, or the check
 should be scoped to the `team:` line. Cosmetic; the workflows and validator
 do not read the comment.
 
-### D3. `init` promises the default `GITHUB_TOKEN` suffices; the sweep's PR creation could not be checked
+### D3. `init` promises the default `GITHUB_TOKEN` suffices; the sweep cannot open its PR with it (confirmed in the retry)
 
 **Where:** `references/init-connect.md`, "What `init` does not do": "The
 default `GITHUB_TOKEN` is enough for the template workflows."
 
-**Observed:** unverified, because no workflow reached its script (D1). The
-part at risk is `stale_sweep.py`'s `gh pr create` under the workflow token:
-GitHub's repository setting "Allow GitHub Actions to create and approve pull
-requests" is off by default for user-owned repositories, and when it is off
-`gh pr create` with `GITHUB_TOKEN` is refused. The sweep's PR in this run was
-opened with a user token, which does not exercise that path. Recorded as an
-open question to settle on the first run after D1 is fixed, with the
-documentation (and possibly `init`) adjusted if the setting is required.
+**Observed (first round):** unverified, because no workflow reached its
+script (D1); the sweep's PR #3 was opened with a user token, which does not
+exercise the path.
+
+**Observed (retry):** with the shim in place, `stale-sweep.yml` via
+`workflow_dispatch` on a registry with one dead source
+([run 34049705584](https://github.com/mbarretta/jocasta-sandbox/actions/runs/34049705584))
+ran `stale_sweep.py`, which force-pushed its proposal branch
+`jocasta/stale-fd` as `github-actions[bot]`
+([`cdac4e5`](https://github.com/mbarretta/jocasta-sandbox/commit/cdac4e516c890f9b736e4c29e5de12030caaae59),
+the correct `route: stale-source` change) and then failed at
+`gh pr create` with
+
+```
+GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)
+```
+
+reporting `1 failed` and exiting 1 (the workflow run is red, which is the
+right signal). The sandbox's setting at the time, read with
+`gh api repos/mbarretta/jocasta-sandbox/actions/permissions/workflow`, was
+`{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}`,
+GitHub's default for a repository created by `gh repo create` as `init`
+does. So the sentence is not true as written: the token's *scopes*
+(`contents: write`, `pull-requests: write` in the template) are enough, but
+the repository must also have "Allow GitHub Actions to create and approve
+pull requests" turned on, or the weekly sweep will push branches and never
+open the PR they are for. Fix candidates, for the deferral: (a) change the
+sentence in `init-connect.md` and add the setting to `init`'s steps (one
+`gh api -X PUT repos/<org>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true -f default_workflow_permissions=read`;
+expected to work with the `repo` scope, but not verified in this run, where
+the call was not made) or to the template README's setup notes; (b)
+alternatively document a `JOCASTA_TOKEN` personal token for the sweep, which
+the template's `token:` input already accepts. Which is the user's call. Side
+observation, not a separate discrepancy: when PR creation fails the sweep has
+already pushed the branch, so an instance in this state accumulates
+`jocasta/stale-<name>` branches with no PR; the next successful sweep
+force-pushes the same branch and opens the PR, so nothing is lost.
 
 ## Known limits, as instructed
 
@@ -589,22 +823,36 @@ documentation (and possibly `init`) adjusted if the setting is required.
   them and waiting with `1 of 2 non-owner voices`.
 - **Workflow-token PRs and `pull_request` triggers.** The rule that a PR
   opened with `GITHUB_TOKEN` starts no `pull_request` workflows was expected
-  but not observable: the sweep's PR had to be opened with a user token
-  because the workflow never ran (D1), and that PR did start the workflows.
-- **`delete_repo` scope.** The sandbox could not be deleted and is left in
-  place; the two commands to delete it are in step 15.
+  but not observable in either round: in the first the sweep never ran (D1)
+  and its PR was opened with a user token; in the retry the sweep ran but
+  GitHub refused to let it open a PR (D3), and changing that repository
+  setting was outside what this run could do.
+- **`delete_repo` scope.** The sandbox could not be deleted (both rounds) and
+  is left in place; the two commands to delete it are in step 15.
 
 ## Sandbox state at the end
 
-`mbarretta/jocasta-sandbox`, private. `main` at `a66cdba`, ten commits:
-`129d59f` Initialize, `0b53e61` register ripgrep, `3c1ee5e` register
-the-silver-searcher, `f96c82a` adopt ripgrep, `b94ea99` deprecate
-the-silver-searcher, `f65ea53` release ripgrep, `db471ce` register fd,
-`740960b` break fd source, `e389c65` fix fd source, `a66cdba` foreign-login
-adoption edit. Entries: `fd` (active, owner `mbarretta`), `ripgrep` (active,
+`mbarretta/jocasta-sandbox`, private. `main` at `1a9fb2b`, nineteen commits.
+First round (ten): `129d59f` Initialize, `0b53e61` register ripgrep,
+`3c1ee5e` register the-silver-searcher, `f96c82a` adopt ripgrep, `b94ea99`
+deprecate the-silver-searcher, `f65ea53` release ripgrep, `db471ce` register
+fd, `740960b` break fd source, `e389c65` fix fd source, `a66cdba`
+foreign-login adoption edit. Retry (nine): `e46792b` shim, `31d8fee`
+register jq, `f6d4bad` shim checkout, `b62cd53` adopt jq, `4d6ba51` break fd
+source, `2b9348f` fix fd source, `b8bc178` deprecate jq, `81a58f6` release
+fd, `1a9fb2b` foreign-login adoption edit. Entries: `fd` (active, unowned),
+`jq` (deprecated, route `owner`, owner `mbarretta`), `ripgrep` (active,
 unowned), `the-silver-searcher` (deprecated, route `owner`).
-`adoption.yaml`: `ripgrep: [mbarretta, octocat]` (the deliberate violation).
-PRs: #1 `claim ripgrep` open, #2 `deprecate ripgrep` open, #3 `deprecate fd
-(stale source)` closed. Branches: `main`, `jocasta/claim-ripgrep-mbarretta`,
-`jocasta/deprecate-ripgrep-mbarretta`, `jocasta/stale-fd`, `e2e-probe`.
-Labels added: `ownership`, `deprecation`, `stale-source`.
+`adoption.yaml`: `jq: [mbarretta, octocat]`, `ripgrep: [mbarretta, octocat]`
+(both deliberate violations). PRs: #1 `claim ripgrep` open (2 commits, the
+second empty), #2 `deprecate ripgrep` open (same), #3 `deprecate fd (stale
+source)` closed. Branches: `main`, `jocasta/claim-ripgrep-mbarretta`,
+`jocasta/deprecate-ripgrep-mbarretta`, `jocasta/stale-fd` (now at the bot's
+`cdac4e5`, no PR), `e2e-probe`. Labels added: `ownership`, `deprecation`,
+`stale-source`. The shim is on `main`: `.github/actions/{validate,consensus-merge,stale-sweep}/action.yml`
+and the three rewired workflows, so **this sandbox is not a clean `init`
+product and should not be reused as one**; delete it, or re-run `init` into
+a new repository, before any further verification. Actions setting
+`can_approve_pull_request_reviews` is still `false`. 51 runs in all: 31
+failure (22 first-round checkout failures, 6 shim-accommodation failures, 3
+red for the right reason), 6 skipped, 14 success (13 retry, 1 probe).
