@@ -72,6 +72,13 @@ it, labels it, or pushes to its branch. Add a repository secret named
 `JOCASTA_TOKEN` holding a personal access token or GitHub App token that can
 read those repositories, and both workflows use it instead.
 
+One more thing the sweep needs: the repository setting "Allow GitHub Actions to
+create and approve pull requests" (Settings, Actions, General). Without it,
+`stale-sweep` pushes its proposal branch and then cannot open the pull request
+for it. `init` turns the setting on when it creates the registry; if that was
+refused, an admin can turn it on by hand, or the same `JOCASTA_TOKEN` secret
+covers it.
+
 Branch protection is not set up for you. `validate` cannot undo a push it
 flags, and a pull request's own run is skipped (the pull request path is gated
 by review and `consensus-merge` instead), so someone with push access could

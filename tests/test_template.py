@@ -25,6 +25,9 @@ ACTIONS = MACHINERY_GITHUB / "actions"
 
 MACHINERY = "mbarretta/jocasta"
 PINNED_REF = "v1"
+# The env var each composite action writes its own `github.action_ref` into
+# before the nested checkout reads it (D1 in docs/e2e-report.md).
+MACHINERY_REF_ENV = "JOCASTA_MACHINERY_REF"
 
 # Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment
 # naming the release, never to a moving tag: the composite actions run with
@@ -161,6 +164,20 @@ def test_placeholder_team_is_the_only_placeholder():
     assert hits == {"PLACEHOLDER_TEAM"}
 
 
+def test_placeholder_team_appears_once_so_init_can_replace_it_literally():
+    # D2 (docs/e2e-report.md): init substitutes the marker literally and then
+    # greps the checkout for leftovers, so a second occurrence anywhere in the
+    # template (the header comment once named it) is either rewritten into
+    # nonsense or fails init's own check.
+    lines = [
+        line
+        for text in text_under(TEMPLATE).values()
+        for line in text.splitlines()
+        if "PLACEHOLDER_TEAM" in line
+    ]
+    assert lines == ["team: PLACEHOLDER_TEAM"]
+
+
 # --- instance workflows --------------------------------------------------
 
 
@@ -227,7 +244,7 @@ def test_each_action_bootstraps_the_machinery_the_same_way(name):
 
     checkout = uses_step(action, "actions/checkout@")
     assert checkout["with"]["repository"] == MACHINERY
-    assert checkout["with"]["ref"] == "${{ github.action_ref }}"
+    assert checkout["with"]["ref"] == f"${{{{ env.{MACHINERY_REF_ENV} }}}}"
     assert checkout["with"]["path"] not in ("", ".", None), "machinery goes in a subdirectory"
 
     python = uses_step(action, "actions/setup-python@")
@@ -242,6 +259,28 @@ def test_each_action_bootstraps_the_machinery_the_same_way(name):
     for step in script_steps:
         assert step["env"]["GH_TOKEN"] == "${{ inputs.token }}"
         assert step["shell"] == "bash"
+
+
+@pytest.mark.parametrize("name", ["validate", "consensus-merge", "stale-sweep"])
+def test_each_action_captures_its_own_ref_before_the_nested_checkout(name):
+    # D1 (docs/e2e-report.md): `${{ github.action_ref }}` evaluated inside a
+    # nested `uses:` step's `with:` block names the nested action's ref (the
+    # checkout action's own tag), not the tag the instance called this action
+    # at, so every instance workflow at `@v1` failed at the machinery checkout.
+    # The value is correct in a `run:` step, so the step just before the
+    # checkout captures it into $GITHUB_ENV and the checkout reads it back.
+    action = load(ACTIONS / name / "action.yml")
+    all_steps = steps(action)
+    checkout = uses_step(action, "actions/checkout@")
+    capture = all_steps[all_steps.index(checkout) - 1]
+
+    assert "uses" not in capture and capture["shell"] == "bash", capture
+    seen_by_capture = "\n".join([capture["run"], *capture.get("env", {}).values()])
+    assert "${{ github.action_ref }}" in seen_by_capture, capture
+    assert re.search(rf'{MACHINERY_REF_ENV}=.*>>\s*"?\$GITHUB_ENV', capture["run"]), capture["run"]
+
+    assert checkout["with"]["ref"] == f"${{{{ env.{MACHINERY_REF_ENV} }}}}"
+    assert "github.action_ref" not in str(checkout["with"]), "the with: block must not evaluate github.action_ref"
 
 
 def test_validate_action_invokes_the_documented_cli_contract():

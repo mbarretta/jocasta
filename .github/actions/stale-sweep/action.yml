@@ -22,11 +22,20 @@ inputs:
 runs:
   using: composite
   steps:
+    # Inside a composite action, `github.action_ref` evaluated in a nested
+    # `uses:` step's `with:` block names the nested action's ref (checkout's
+    # own tag), not the tag the instance called this action at. It is correct
+    # in a `run:` step, so capture it there first (docs/e2e-report.md, D1).
+    - name: Capture the release this action was called at
+      shell: bash
+      env:
+        CALLED_REF: ${{ github.action_ref }}
+      run: echo "JOCASTA_MACHINERY_REF=${CALLED_REF}" >> "$GITHUB_ENV"
     - name: Check out the jocasta machinery at the pinned release
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: mbarretta/jocasta
-        ref: ${{ github.action_ref }}
+        ref: ${{ env.JOCASTA_MACHINERY_REF }}
         path: .jocasta-machinery
         persist-credentials: false
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
