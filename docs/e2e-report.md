@@ -856,3 +856,31 @@ a new repository, before any further verification. Actions setting
 `can_approve_pull_request_reviews` is still `false`. 51 runs in all: 31
 failure (22 first-round checkout failures, 6 shim-accommodation failures, 3
 red for the right reason), 6 skipped, 14 success (13 retry, 1 probe).
+
+## Fixes applied
+
+The three discrepancies above were fixed in the machinery after this report
+was recorded, in one commit under the plan task `def-e2e`, the same commit
+that adds this section (`git log -S 'Fixes applied' --format=%h -- docs/e2e-report.md`
+names it). Nothing above this heading was edited; the observations stand as
+recorded, including the `v1` tag's state at the time, which the release
+process re-cuts after the merge.
+
+- **D1.** Each of `.github/actions/{validate,consensus-merge,stale-sweep}/action.yml`
+  gained a `run:` step ahead of the nested checkout that captures
+  `${{ github.action_ref }}` through its `env:` and writes it to `$GITHUB_ENV`
+  as `JOCASTA_MACHINERY_REF`; the checkout reads
+  `ref: ${{ env.JOCASTA_MACHINERY_REF }}`, the shape the `e2e-probe` run
+  demonstrated. `tests/test_template.py` now pins that shape and fails against
+  the old `with:`-block expression. The pinned `actions/checkout` and
+  `actions/setup-python` SHAs are unchanged.
+- **D2.** `template/jocasta.yaml`'s header comment no longer names the
+  placeholder, so `init`'s literal replacement touches only the `team:` line;
+  a test pins that the marker appears once in the whole template.
+- **D3.** `references/init-connect.md` gained step 2, run right after
+  `gh repo create`: `gh api -X PUT repos/<org>/<name>/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true`,
+  with the reason (the sweep opens pull requests with the workflow token) and
+  a refusal treated as a warning rather than a stop. The closing paragraph no
+  longer says the default `GITHUB_TOKEN` is enough; it documents the
+  `JOCASTA_TOKEN` secret as the fallback for a caller without admin or with
+  private sources. `tests/test_init_connect_reference.py` pins both.

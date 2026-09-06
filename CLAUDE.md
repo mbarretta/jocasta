@@ -38,6 +38,7 @@ This repo is the **machinery**: the reusable half every team shares.
 | `.github/workflows/ci.yml` | CI for this repo. |
 | `template/` | The **instance** template: what `init` copies verbatim to create a team's registry repo (`jocasta.yaml`, `adoption.yaml`, `entries/README.md`, `README.md`, three thin workflows). It carries no logic of its own; `PLACEHOLDER_TEAM` is its only placeholder. |
 | `tests/` | pytest suite. `conftest.py` puts `scripts/` on `sys.path` so tests `import validate` directly. Fixtures under `tests/fixtures/` are complete minimal instances, one per validator rule. |
+| `docs/` | End-to-end verification reports (`e2e-report.md`): what was run against a real sandbox instance, what was observed, and the discrepancies found. |
 | `.claude/plans/` | Harness plan JSONs. Tracked on purpose. |
 
 Machinery vs template is the line to keep sharp: anything a team's registry
