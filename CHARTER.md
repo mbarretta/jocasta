@@ -1,8 +1,8 @@
 ---
-charter_version: "1.0"
+charter_version: "1.1"
 project: jocasta
 created: 2026-09-04
-last_amended: 2026-09-04
+last_amended: 2026-09-07
 ---
 
 # jocasta — Project Charter
@@ -112,10 +112,28 @@ one will be my SA team at ClickHouse.
 - **Tradeoff accepted:** A voice with attitude can add friction to the one interaction that must stay frictionless (P-2). Clarity wins every conflict — the voice is never allowed to obscure what she did to the repo.
 - **Affects:** R-8, P-2.
 
+### D-8 — Adoption is a per-login list in one shared file, written by direct commit (2026-09-06, active)
+- **Decision:** `adoption.yaml` maps a tool name to the GitHub logins that use it. Anyone adds or removes only their own login, by direct commit; `validate.py` enforces the own-login rule at push time. Search shows the adopter count.
+- **Rejected:** Adoption as a field on the entry (every adopt would be a PR against someone else's entry, breaking P-2's cost ceiling); aggregate counters (not reviewable as a diff and not verifiable).
+- **Tradeoff accepted:** Adopters are named in a file everyone can read. A shared file that non-owners edit directly is a deliberate exception to D-3, safe because you only ever touch your own line.
+- **Affects:** R-7, D-3, P-5. Resolves T-2.
+
+### D-9 — Consensus merges carry only deprecations and claims, voiced by repository insiders (2026-09-06, active)
+- **Decision:** The consensus action merges a PR only when its diff is exactly a deprecation (status active to deprecated, with a route) or an ownership claim. Authorship and approvals count only from accounts whose association is owner, member, or collaborator; the owner's veto is matched case-insensitively. Push-time authorization also runs on merge commits, skipping only GitHub's synthetic `pull_request` merges and the Actions bot.
+- **Rejected:** A shape-only gate that checks which file changed but not what changed (two votes could rewrite an `install` line: a supply-chain edit dressed as a deprecation); counting any approving account (a public instance would accept outside votes).
+- **Tradeoff accepted:** Any other change to an entry you do not own has no automated path; an owner who is not a repository collaborator cannot veto.
+- **Affects:** D-3, R-5, P-4, P-5, N-5.
+
+### D-10 — Elevated workflow credentials are short-lived: the workflow token by default, an OctoSTS-minted App token when more is needed (2026-09-07, active)
+- **Decision:** `init` turns on "Allow GitHub Actions to create and approve pull requests" right after creating the repo, so the stale sweep opens PRs with the per-job `GITHUB_TOKEN`; no secret is stored. When an instance needs more — sweep PRs that trigger `pull_request` workflows, or sources in private repositories — the template's workflows exchange their OIDC identity for a minutes-lived GitHub App token through OctoSTS (Chainguard), governed by a trust policy committed in the instance repo. A long-lived personal access token is discouraged, not documented as a route.
+- **Rejected:** A PAT or App private key stored as a repo secret (a standing credential with write access to the registry, rotated by nobody); dropping the stale-source PR route (R-5's third route).
+- **Tradeoff accepted:** `init` touches one repository setting beyond the workflow files; OctoSTS is a third-party App a team installs once; with only the workflow token, PRs the sweep opens do not trigger `pull_request` workflows until a human pushes to them.
+- **Affects:** R-5, R-9, N-5, P-4.
+
 ## Open Tensions
 
 - **T-1** (open): R-1's search quality against D-2's no-index constraint. Prose search over a fetched snapshot is fine at team scale and breaks at org scale. Revisit past roughly 200 entries, or when a search stops feeling instant.
-- **T-2** (open): R-7's adoption signal is telemetry, recorded in a repo everyone can read, about an archive whose selling point is honesty. What gets recorded, by whom, and whether it is per-person or aggregate is unresolved.
+- ~~**T-2**~~ (resolved by D-8): R-7's adoption signal is telemetry, recorded in a repo everyone can read, about an archive whose selling point is honesty. What gets recorded, by whom, and whether it is per-person or aggregate is unresolved.
 - **T-3** (open): N-6 versus reality — every real requirement will arrive from the ClickHouse instance, and the pull to encode its habits in the public machinery is constant.
 
 ## Revision History
@@ -123,3 +141,4 @@ one will be my SA team at ClickHouse.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-09-04 | Founded (greenfield init). |
+| 1.1 | 2026-09-07 | Added D-8, D-9, D-10; resolved T-2 (reconcile feat-jocasta-v1; D-10 revised with the user toward short-lived credentials). |
