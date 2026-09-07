@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ${{ github.event_name }}
   token:
-    description: Exported as GH_TOKEN for source-reachability checks through `gh api`. Defaults to the workflow token; pass a personal access token if sources live in repositories the workflow token cannot read.
+    description: Exported as GH_TOKEN for source-reachability checks through `gh api`. Defaults to the workflow token; the template's validate.yml passes the short-lived GitHub App token its OctoSTS step minted, when it minted one.
     required: false
     default: ${{ github.token }}
 

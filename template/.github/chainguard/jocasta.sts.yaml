@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/octo-sts/app/refs/heads/main/pkg/octosts/octosts.TrustPolicy.json
+#
+# OctoSTS trust policy (https://github.com/octo-sts/app). It lets this
+# repository's own workflows, running on the default branch, exchange their
+# GitHub Actions identity for a GitHub App token that lives for minutes and
+# can write to this repository and nothing else. `init` replaces the
+# placeholder in `subject` with this repository's owner/name. Nothing is
+# minted unless the OctoSTS App (https://github.com/apps/octo-sts) is
+# installed on this repository; without it the workflows keep using their
+# own per-job token. If the default branch is ever renamed, update `subject`
+# too, or the exchange fails softly and the workflows fall back the same way.
+issuer: https://token.actions.githubusercontent.com
+subject: repo:PLACEHOLDER_REPO:ref:refs/heads/main
+
+permissions:
+  contents: write
+  pull_requests: write
