@@ -1,0 +1,13 @@
+{
+  "charter_path": "CHARTER.md",
+  "last_reconcile": {
+    "at": "2026-09-07T12:16:32-04:00",
+    "plan_slug": "feat-jocasta-v1",
+    "amendments": [
+      "D-8",
+      "D-9",
+      "D-10",
+      "T-2 resolved"
+    ]
+  }
+}

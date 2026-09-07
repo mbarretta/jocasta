@@ -1,0 +1,20 @@
+{
+  "plans": [
+    {
+      "slug": "feat-jocasta-v1",
+      "title": "Build Jocasta v1: skill, schema, validators, template, and instance workflows",
+      "status": "complete",
+      "mode": "dev",
+      "parallelism": "auto",
+      "tasks_total": 21,
+      "tasks_complete": 21,
+      "wave_state": "idle",
+      "current_wave": null,
+      "wave_tasks_in_flight": [],
+      "paused_reason": "",
+      "deferred_open": 3,
+      "updated": "2026-09-07T12:34:37-04:00",
+      "path": "/Users/barretta/workspace/github/mbarretta/jocasta/.claude/plans/feat-jocasta-v1.json"
+    }
+  ]
+}
