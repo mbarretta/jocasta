@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  # Lets the run prove its identity to OctoSTS below.
+  id-token: write
 
 jobs:
   validate:
@@ -22,6 +24,19 @@ jobs:
         with:
           # Full history: the validator diffs against the base ref below.
           fetch-depth: 0
+      # Exchange this run's identity for a GitHub App token that lives for
+      # minutes, under the trust policy in .github/chainguard/jocasta.sts.yaml.
+      # The policy admits runs on the default branch only, so on a pull
+      # request, and whenever the OctoSTS App is not installed on this
+      # repository, the step fails softly, its output is empty, and the
+      # validator runs on the per-job github.token as before, which can read
+      # only this repository.
+      - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        id: octo-sts
+        continue-on-error: true
+        with:
+          scope: ${{ github.repository }}
+          identity: jocasta
       - uses: mbarretta/jocasta/.github/actions/validate@v1
         with:
           actor: ${{ github.actor }}
@@ -29,7 +44,4 @@ jobs:
           # A pull request's own run checks out GitHub's synthetic merge and is
           # skipped; a push is checked even when it is a merge commit.
           event: ${{ github.event_name }}
-          # The workflow token can only see this repository. If your tools live
-          # in private repositories, add a JOCASTA_TOKEN secret that can read
-          # them; without it the workflow token is used as is.
-          token: ${{ secrets.JOCASTA_TOKEN || github.token }}
+          token: ${{ steps.octo-sts.outputs.token || github.token }}

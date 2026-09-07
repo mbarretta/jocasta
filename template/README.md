@@ -63,21 +63,34 @@ a pinned release (`machinery_ref` in `jocasta.yaml`):
   request proposing deprecation when a source has gone away. Fix the source and
   close the pull request to dismiss it.
 
-The workflows run with the repository's own token, which can read only this
-repository and cannot trigger other workflows. Two consequences, both fixed by
-one secret: if your tools live in private repositories, `validate` and
-`stale-sweep` cannot confirm their sources are still there; and a pull request
-opened by `stale-sweep` does not start `consensus-merge` until a person reviews
-it, labels it, or pushes to its branch. Add a repository secret named
-`JOCASTA_TOKEN` holding a personal access token or GitHub App token that can
-read those repositories, and both workflows use it instead.
+The workflows run with the repository's own per-job token, which can read only
+this repository and cannot trigger other workflows. Two consequences: if your
+tools live in private repositories, `validate` and `stale-sweep` cannot confirm
+their sources are still there; and a pull request opened by `stale-sweep` does
+not start `consensus-merge` or `validate` until a person reviews it, labels it,
+or pushes to its branch. When a workflow needs more, it does not read a stored
+secret. `validate` and `stale-sweep` exchange the run's own identity for a
+GitHub App token that lives for minutes, through
+[OctoSTS](https://github.com/octo-sts/app), under the trust policy committed in
+`.github/chainguard/jocasta.sts.yaml`: runs on this repository's `main` branch
+get `contents` and `pull_requests` write on this repository and nothing else.
+To turn it on, install the [OctoSTS App](https://github.com/apps/octo-sts) on
+this repository; until then the exchange fails quietly and the workflows keep
+using their own token. With it, the sweep's pull requests start
+`consensus-merge` and `validate` the moment they open. Reaching sources in your
+organization's other private repositories takes an organization-level trust
+policy as well (see the OctoSTS documentation); the template does not carry
+one. A long-lived personal access token stored as a secret is not a route this
+registry documents: it is a standing credential with write access to the
+archive, rotated by nobody.
 
-One more thing the sweep needs: the repository setting "Allow GitHub Actions to
-create and approve pull requests" (Settings, Actions, General). Without it,
-`stale-sweep` pushes its proposal branch and then cannot open the pull request
-for it. `init` turns the setting on when it creates the registry; if that was
-refused, an admin can turn it on by hand, or the same `JOCASTA_TOKEN` secret
-covers it.
+One more thing the sweep needs when it runs on its own token: the repository
+setting "Allow GitHub Actions to create and approve pull requests" (Settings,
+Actions, General). Without it, `stale-sweep` pushes its proposal branch and
+then cannot open the pull request for it. `init` turns the setting on when it
+creates the registry; if that was refused, an admin can turn it on by hand, or
+the App token above covers it, because the setting restricts only the
+workflow's own token.
 
 Branch protection is not set up for you. `validate` cannot undo a push it
 flags, and a pull request's own run is skipped (the pull request path is gated

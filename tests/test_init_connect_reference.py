@@ -6,9 +6,12 @@ D3) showed are load-bearing: a repository made by ``gh repo create`` does not
 let Actions open pull requests, so ``init`` must turn that setting on right
 after creating the repo or the weekly stale sweep pushes branches it can never
 open pull requests for; the closing paragraph must not promise that the
-workflow token alone is enough, and must name the ``JOCASTA_TOKEN`` fallback
-for a caller who cannot change the setting; and ``connect`` must keep pointing
-at the right ``init`` steps by number once a step is inserted.
+workflow token alone is enough, and must describe the short-lived-token route
+(charter D-10: the OctoSTS App, never a stored personal access token) for a
+caller who cannot change the setting; ``init`` must substitute and grep-check
+the trust policy's repo placeholder alongside the team one; and ``connect``
+must keep pointing at the right ``init`` steps by number once a step is
+inserted.
 """
 
 import re
@@ -24,6 +27,12 @@ PERMISSIONS_CALL = (
     "gh api -X PUT repos/<org>/<name>/actions/permissions/workflow"
     " -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true"
 )
+
+# Charter D-10: the App a team installs once to mint minutes-lived tokens.
+OCTO_STS_APP = "https://github.com/apps/octo-sts"
+STS_POLICY = ".github/chainguard/jocasta.sts.yaml"
+# The standing credential D-10 rejects; assembled so this file is not a hit.
+RETIRED_SECRET = "JOCASTA_" + "TOKEN"
 
 
 def _text() -> str:
@@ -57,8 +66,9 @@ def test_init_lets_actions_open_pull_requests_right_after_creating_the_repo():
     assert PERMISSIONS_CALL in body, body
     # One sentence of why: the sweep opens pull requests with the workflow token.
     assert re.search(r"sweep.*pull requests?.*workflow", body, flags=re.IGNORECASE | re.DOTALL), body
-    # A refusal (no admin on the new repo) is not a stop; the fallback is named.
-    assert "admin" in body and "JOCASTA_TOKEN" in body, body
+    # A refusal (no admin on the new repo) is not a stop; the fallback is the
+    # short-lived App token, never a stored secret.
+    assert "admin" in body and "OctoSTS" in body, body
 
 
 def test_init_steps_are_consecutive_and_connect_cites_them_by_the_right_number():
@@ -75,10 +85,37 @@ def test_init_steps_are_consecutive_and_connect_cites_them_by_the_right_number()
     assert not re.findall(rf"`init` step (?!{config}\b|{snapshot}\b)\d+", connect), connect
 
 
-def test_what_init_does_not_do_names_the_token_fallback_instead_of_promising_the_workflow_token():
+def test_init_substitutes_and_grep_checks_both_placeholders():
+    steps = _numbered_steps(_section(_text(), r"`init "))
+    (body,) = [b for _, title, b in steps if title.lower().startswith("replace the placeholders")]
+    assert "PLACEHOLDER_TEAM" in body and "`jocasta.yaml`" in body, body
+    assert "PLACEHOLDER_REPO" in body and f"`{STS_POLICY}`" in body, body
+    assert "<org>/<name>" in body, body
+    # One grep covers both markers, so neither can leak into the initial commit.
+    assert re.search(r"grep -rn PLACEHOLDER_ <workdir>", body), body
+
+
+def test_init_offers_the_octo_sts_app_as_an_optional_step_and_says_what_it_buys():
+    steps = _numbered_steps(_section(_text(), r"`init "))
+    (body,) = [b for _, title, b in steps if "octosts" in title.lower().replace("-", "")]
+    assert "optional" in body.lower(), body
+    assert OCTO_STS_APP in body, body
+    # What it buys: sweep PRs that trigger pull_request workflows; private sources.
+    assert re.search(r"`pull_request`", body) and "private" in body, body
+
+
+def test_what_init_does_not_do_describes_the_short_lived_token_model():
     init = _section(_text(), r"`init ")
     (paragraph,) = [p for p in init.split("\n\n") if p.startswith("What `init` does not do")]
     assert "`GITHUB_TOKEN` is enough" not in paragraph, paragraph
-    assert "JOCASTA_TOKEN" in paragraph and "admin" in paragraph, paragraph
+    assert "OctoSTS" in paragraph and "admin" in paragraph, paragraph
+    assert "short-lived" in paragraph or "minutes" in paragraph, paragraph
+    # A PAT is discouraged, not documented as a route.
+    assert re.search(r"personal access token", paragraph), paragraph
+    assert RETIRED_SECRET not in paragraph
     # The charter N-5 sentence that closes the paragraph stays.
     assert "charter N-5" in paragraph
+
+
+def test_the_retired_secret_is_named_nowhere_in_the_reference():
+    assert RETIRED_SECRET not in _text()

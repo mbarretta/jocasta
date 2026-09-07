@@ -66,9 +66,11 @@ current directory holds `jocasta.yaml`, that registry wins over the config
 file.
 
 `init` creates no branch protection, secrets, or teams. The registry's
-workflows run with the repository's own token, and anyone who can push to the
-repo can use it. See [staying honest](#how-the-archive-stays-honest) below for
-the two settings worth turning on by hand.
+workflows run with the repository's own token (or a minutes-lived GitHub App
+token they exchange it for, once the team installs the OctoSTS App; see
+[staying honest](#how-the-archive-stays-honest) below), and anyone who can push
+to the repo can use it. The same section names the two settings worth turning
+on by hand.
 
 ## Find a tool
 
@@ -144,9 +146,11 @@ Second, a pull request opened by `stale-sweep` with the workflow's own token
 does not start the `consensus-merge` workflow's `opened` run, because GitHub
 does not let a workflow token trigger further workflows; the script first runs
 on the first human event on that PR (a review, a label, or a push to its
-branch). Set the instance's `JOCASTA_TOKEN` secret to a personal access token
-or GitHub App token if you want the sweep's pull requests treated like a
-person's from the moment they open.
+branch). Install the [OctoSTS App](https://github.com/apps/octo-sts) on the
+instance if you want the sweep's pull requests treated like a person's from the
+moment they open: `stale-sweep.yml` then exchanges the run's identity for a
+GitHub App token that lives for minutes and opens the pull request with it
+(charter D-10). No personal access token is stored anywhere.
 
 ## Adoption
 
@@ -179,7 +183,13 @@ moved to is this repo's release decision, not the instance's.
 `scripts/validate.py`, and a mismatch fails validation naming both numbers;
 that is how a schema change becomes a loud, deliberate upgrade on the
 instance rather than a silent misread. A change to the entry format therefore
-ships as a new tag and a new schema version together.
+ships as a new tag and a new schema version together. Elevated credentials
+follow the same no-standing-secret rule (charter D-10): when `validate` or
+`stale-sweep` needs more than its per-job token, it exchanges the run's OIDC
+identity for a GitHub App token that lives for minutes through
+[OctoSTS](https://github.com/octo-sts/app), under the trust policy
+`template/.github/chainguard/jocasta.sts.yaml` that `init` copies into every
+instance, and falls back to the workflow token when the App is not installed.
 
 What the push check does and does not do, so nobody mistakes it for more than
 it is. `validate.yml` runs after a push has landed; a violation turns that run
@@ -204,7 +214,7 @@ these; a repository admin does, once.
 | `skills/jocasta/` | The Claude Code skill: `SKILL.md` (modes, config, snapshot, identity, voice) and `references/*.md` (one protocol per file, plus the schema and voice guides). |
 | `scripts/` | `validate.py`, `consensus_merge.py`, `stale_sweep.py`, and `jocasta_common.py`. Python 3.11+ and PyYAML, nothing else. |
 | `.github/actions/` | The three composite actions instances call at `@v1`. |
-| `template/` | What `init` copies to create an instance: `jocasta.yaml`, `adoption.yaml`, `entries/README.md`, a README, and the three workflows. |
+| `template/` | What `init` copies to create an instance: `jocasta.yaml`, `adoption.yaml`, `entries/README.md`, a README, the three workflows, and the OctoSTS trust policy. |
 | `.claude-plugin/` | `plugin.json` and the single-plugin `marketplace.json`. |
 | `tests/` | pytest suite; `uv run pytest -q` runs it. |
 

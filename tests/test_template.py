@@ -3,8 +3,9 @@
 ``template/`` is copied verbatim by ``init`` to become a team's registry repo,
 and its thin workflows call the composite actions under ``.github/actions/``
 at a pinned tag. Nothing here is executable locally, so these tests pin the
-shape the plan fixes instead: the file set, the single placeholder, the
-triggers and permissions of each workflow, the CLI contract each action
+shape the plan fixes instead: the file set, the two placeholders, the
+triggers and permissions of each workflow, the OctoSTS trust policy and the
+exchange step that uses it (charter D-10), the CLI contract each action
 invokes, and the commit-SHA pins on every third-party action. A parse failure
 or a drifted flag here is a broken instance in the field, where nobody runs
 pytest.
@@ -42,9 +43,26 @@ VERSION_COMMENT = re.compile(r" # v\d+\.\d+\.\d+")
 # repo-wide guard over tests/ stays clean.
 FORBIDDEN_ORG_NAMES = ("click" + "house",)
 
+# Charter D-10: when a workflow needs more than the per-job token it exchanges
+# its OIDC identity for a minutes-lived GitHub App token through OctoSTS,
+# governed by this trust policy in the instance repo. The action is
+# octo-sts/action (chainguard-dev/octo-sts-action is a stub whose README
+# points there); its inputs are `scope` and `identity`, its output `token`.
+STS_ACTION = "octo-sts/action"
+STS_IDENTITY = "jocasta"
+STS_POLICY = TEMPLATE / ".github" / "chainguard" / f"{STS_IDENTITY}.sts.yaml"
+STS_STEP_ID = "octo-sts"
+# Every instance workflow that asks for an elevated token falls back to the
+# per-job token when the exchange fails (App not installed, branch renamed).
+STS_TOKEN_EXPR = f"${{{{ steps.{STS_STEP_ID}.outputs.token || github.token }}}}"
+# The standing credential D-10 rejects. It must not be documented as a route
+# anywhere a team reads: the template, the actions, the skill, or the README.
+RETIRED_SECRET = "JOCASTA_" + "TOKEN"
+
 EXPECTED_YAML = [
     TEMPLATE / "jocasta.yaml",
     TEMPLATE / "adoption.yaml",
+    STS_POLICY,
     TEMPLATE_WORKFLOWS / "validate.yml",
     TEMPLATE_WORKFLOWS / "consensus-merge.yml",
     TEMPLATE_WORKFLOWS / "stale-sweep.yml",
@@ -157,15 +175,22 @@ def test_template_readme_explains_the_registry_the_plugin_and_the_rule():
     assert "plugin" in readme and f"github.com/{MACHINERY}" in readme
 
 
-def test_placeholder_team_is_the_only_placeholder():
+def test_the_team_and_repo_placeholders_are_the_only_placeholders():
     hits = {
         m for text in text_under(TEMPLATE).values() for m in re.findall(r"PLACEHOLDER_\w+", text)
     }
-    assert hits == {"PLACEHOLDER_TEAM"}
+    assert hits == {"PLACEHOLDER_TEAM", "PLACEHOLDER_REPO"}
 
 
-def test_placeholder_team_appears_once_so_init_can_replace_it_literally():
-    # D2 (docs/e2e-report.md): init substitutes the marker literally and then
+@pytest.mark.parametrize(
+    "marker, expected_line",
+    [
+        ("PLACEHOLDER_TEAM", "team: PLACEHOLDER_TEAM"),
+        ("PLACEHOLDER_REPO", "subject: repo:PLACEHOLDER_REPO:ref:refs/heads/main"),
+    ],
+)
+def test_each_placeholder_appears_once_so_init_can_replace_it_literally(marker, expected_line):
+    # D2 (docs/e2e-report.md): init substitutes each marker literally and then
     # greps the checkout for leftovers, so a second occurrence anywhere in the
     # template (the header comment once named it) is either rewritten into
     # nonsense or fails init's own check.
@@ -173,9 +198,66 @@ def test_placeholder_team_appears_once_so_init_can_replace_it_literally():
         line
         for text in text_under(TEMPLATE).values()
         for line in text.splitlines()
-        if "PLACEHOLDER_TEAM" in line
+        if marker in line
     ]
-    assert lines == ["team: PLACEHOLDER_TEAM"]
+    assert lines == [expected_line]
+
+
+# --- OctoSTS trust policy (charter D-10) ---------------------------------
+
+
+def test_trust_policy_binds_the_instance_default_branch_to_exactly_two_write_permissions():
+    # Field names are the upstream TrustPolicy schema's (octo-sts/app,
+    # pkg/octosts/octosts.TrustPolicy.json): `issuer` and `subject` are exact
+    # matches, `permissions` keys are GitHub App installation permissions, and
+    # the schema forbids unknown keys.
+    policy = load(STS_POLICY)
+    assert set(policy) == {"issuer", "subject", "permissions"}
+    assert policy["issuer"] == "https://token.actions.githubusercontent.com"
+    # init creates `main` explicitly (init-connect.md step 3), so the exact
+    # subject is preferred over a pattern, as upstream recommends.
+    assert policy["subject"] == "repo:PLACEHOLDER_REPO:ref:refs/heads/main"
+    assert policy["permissions"] == {"contents": "write", "pull_requests": "write"}
+
+
+def sts_step(workflow: dict) -> dict:
+    step = uses_step(workflow, f"{STS_ACTION}@")
+    assert step["id"] == STS_STEP_ID
+    # ac5: without the App installed the exchange fails and the workflow must
+    # still succeed on the per-job token.
+    assert step["continue-on-error"] is True
+    assert step["with"] == {"scope": "${{ github.repository }}", "identity": STS_IDENTITY}
+    return step
+
+
+@pytest.mark.parametrize("name", ["validate", "stale-sweep"])
+def test_elevated_workflows_exchange_their_identity_and_fall_back_to_the_workflow_token(name):
+    wf = load(TEMPLATE_WORKFLOWS / f"{name}.yml")
+    assert wf["permissions"]["id-token"] == "write", "the OIDC exchange needs id-token: write"
+    all_steps = steps(wf)
+    sts = sts_step(wf)
+    action = uses_step(wf, f"{MACHINERY}/.github/actions/{name}@")
+    assert all_steps.index(sts) < all_steps.index(action)
+    assert action["with"]["token"] == STS_TOKEN_EXPR
+    # The fallback is documented where the next reader will look.
+    text = (TEMPLATE_WORKFLOWS / f"{name}.yml").read_text()
+    assert "github.token" in text and re.search(r"App.*?installed", text, re.DOTALL), text
+
+
+def test_consensus_merge_does_not_exchange_tokens():
+    # The workflow token is enough to merge; least privilege says no exchange.
+    wf = load(TEMPLATE_WORKFLOWS / "consensus-merge.yml")
+    assert not [s for s in steps(wf) if str(s.get("uses", "")).startswith(STS_ACTION)]
+    assert "id-token" not in wf["permissions"]
+
+
+def test_no_standing_credential_is_documented_anywhere_a_team_reads():
+    roots = (TEMPLATE, MACHINERY_GITHUB, REPO_ROOT / "skills")
+    offenders = [path for path, text in text_under(*roots).items() if RETIRED_SECRET in text]
+    if RETIRED_SECRET in (REPO_ROOT / "README.md").read_text():
+        offenders.append("README.md")
+    assert offenders == []
+    assert "secrets." not in "".join(text_under(TEMPLATE_WORKFLOWS).values())
 
 
 # --- instance workflows --------------------------------------------------
@@ -185,7 +267,7 @@ def test_validate_workflow_runs_read_only_on_default_branch_pushes_and_prs():
     wf = load(TEMPLATE_WORKFLOWS / "validate.yml")
     on = triggers(wf)
     assert "push" in on and "pull_request" in on
-    assert wf["permissions"] == {"contents": "read"}
+    assert wf["permissions"] == {"contents": "read", "id-token": "write"}
 
     (job,) = wf["jobs"].values()
     # Pushes to any other branch are skipped; the default branch is read from
@@ -227,7 +309,7 @@ def test_stale_sweep_workflow_runs_weekly_and_on_demand_with_write_scope():
     fields = schedule["cron"].split()
     assert len(fields) == 5
     assert fields[2] == "*" and fields[3] == "*" and fields[4] != "*", "weekly means one weekday"
-    assert wf["permissions"] == {"contents": "write", "pull-requests": "write"}
+    assert wf["permissions"] == {"contents": "write", "pull-requests": "write", "id-token": "write"}
 
     sweep = uses_step(wf, f"{MACHINERY}/.github/actions/stale-sweep@")
     assert sweep["uses"].endswith(f"@{PINNED_REF}")
@@ -326,7 +408,7 @@ def test_action_inputs_never_reach_a_shell_unescaped():
 
 def test_every_third_party_action_is_pinned_to_a_commit_sha_with_a_version_comment():
     found = third_party_uses()
-    assert {t.split("@")[0] for _, t, _ in found} >= {"actions/checkout", "actions/setup-python"}
+    assert {t.split("@")[0] for _, t, _ in found} >= {"actions/checkout", "actions/setup-python", STS_ACTION}
     for path, target, trailer in found:
         assert SHA_PIN.fullmatch(target), f"{path}: {target} is not pinned to a 40-hex commit SHA"
         assert VERSION_COMMENT.fullmatch(trailer), f"{path}: {target} lacks a trailing # vX.Y.Z comment"
